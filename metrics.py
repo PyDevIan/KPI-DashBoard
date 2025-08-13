@@ -1,11 +1,10 @@
-# metrics.py
 import pandas as pd
 from typing import Callable, Dict
 
 # Registry for KPI functions
 KPI_FUNCTIONS: Dict[str, Callable[[pd.DataFrame], pd.DataFrame]] = {}
 
-# Metadata for each KPI (display name, unit, description)
+# Metadata for each KPI (display name, unit, description, source)
 KPI_META: Dict[str, Dict] = {
     "apps": {
         "display_name": "Apps – Time Saved & Dev Speed",
@@ -14,9 +13,9 @@ KPI_META: Dict[str, Dict] = {
         "source_csv": "apps.csv",
     },
     "data_collection": {
-        "display_name": "Information Gain & Speed",
+        "display_name": "Information Gain",
         "unit": "%",
-        "description": "Weighted info gain (% fields↑) and speed improvement (% time↓). Time stored in seconds; the UI shows deltas in hours.",
+        "description": "Average & weighted information gain (% fields↑) per month.",
         "source_csv": "data_collection.csv",
     },
     "mentoring": {
@@ -25,29 +24,18 @@ KPI_META: Dict[str, Dict] = {
         "description": "Mentor hours, team hours saved, and ROI (saved / mentor) across departments and mentoring types.",
         "source_csv": "mentoring.csv",
     },
-    "ai_engagement": {
-        "display_name": "AI Engagement (Dept Usage)",
-        "unit": "events",
-        "description": "Active users, AI calls, and survey score by department.",
-        "source_csv": "ai_engagement.csv",
-    },
     "project_mgmt": {
         "display_name": "Project Management (MVP Delivery)",
         "unit": "count",
         "description": "Projects running, average MVP cycle (days), and on-time delivery rate.",
         "source_csv": "project_mgmt.csv",
     },
-    "tickets": {
-        "display_name": "Tickets Resolved",
+    # Unified KPI
+    "worklog": {
+        "display_name": "Support Worklog (Tickets & Issues)",
         "unit": "count",
-        "description": "Total number of resolved tickets in selected date range.",
-        "source_csv": "tickets.csv",
-    },
-    "issues": {
-        "display_name": "Issues & Bugs Resolved",
-        "unit": "count",
-        "description": "Total issues in range and per-type breakdown.",
-        "source_csv": "issues.csv",
+        "description": "Counts and total time for Tickets, Bugs, and Errors; plus daily closures.",
+        "source_csv": "worklog.csv",
     },
     "learning": {
         "display_name": "Learning – Efficiency & Profit",
@@ -56,9 +44,9 @@ KPI_META: Dict[str, Dict] = {
         "source_csv": "learning.csv",
     },
     "time_mgmt": {
-        "display_name": "Time Management (Weekly Allocation)",
+        "display_name": "Time Management (Daily Allocation)",
         "unit": "hours",
-        "description": "Weekly allocation of hours across Development, Debugging/Tickets, Mentoring, DevOps, Project Management, and Meetings. Cards show average Development% over the selected range.",
+        "description": "Daily allocation of hours across Development, Debugging/Tickets, Mentoring, DevOps, Project Management, and Meetings.",
         "source_csv": "time_mgmt.csv",
     },
 }
@@ -76,10 +64,10 @@ def register_kpi(name: str):
 @register_kpi("apps")
 def compute_apps(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Expects columns:
+    Expects:
       app_id, app_name, app_type, idea_date, deploy_date, month,
       time_before_hrs, time_after_hrs, frequency_per_month
-    Returns monthly totals: month, total_saved
+    Returns: month, total_saved
     """
     df2 = df.copy()
     for c in ("time_before_hrs", "time_after_hrs", "frequency_per_month"):
@@ -91,73 +79,53 @@ def compute_apps(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# --------- DATA COLLECTION (info gain % + speed %; seconds in CSV) ---------
+# --------- DATA COLLECTION (Info Gain only) ---------
 @register_kpi("data_collection")
-def compute_info_speed(df: pd.DataFrame) -> pd.DataFrame:
+def compute_data_collection(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Expected columns:
-      proc_id, proc_name, month, fields_before, fields_after, time_before_sec, time_after_sec
+    Expects:
+      proc_id, proc_name, month, fields_before, fields_after
     Returns per-month:
-      avg_info_gain_pct, weighted_info_gain_pct, avg_speed_impr_pct, avg_speed_delta_sec, total_fields_added
+      avg_info_gain_pct, weighted_info_gain_pct, total_fields_added
     """
     df2 = df.copy()
-    # Numeric sanitation
-    for c in ["fields_before", "fields_after", "time_before_sec", "time_after_sec"]:
+    for c in ["fields_before", "fields_after"]:
         if c not in df2.columns:
             df2[c] = pd.NA
         df2[c] = pd.to_numeric(df2[c], errors="coerce")
 
-    # Info gain (%)
     valid_fields = df2["fields_before"] > 0
     df2.loc[valid_fields, "info_gain_pct"] = (
         df2["fields_after"] / df2["fields_before"] - 1
     ) * 100
     df2["fields_added"] = df2["fields_after"] - df2["fields_before"]
 
-    # Speed improvement (%) and delta (sec)
-    valid_time = df2["time_before_sec"] > 0
-    df2.loc[valid_time, "speed_impr_pct"] = (
-        (df2["time_before_sec"] - df2["time_after_sec"]) / df2["time_before_sec"] * 100
-    )
-    df2["speed_delta_sec"] = (
-        df2["time_after_sec"] - df2["time_before_sec"]
-    )  # negative == faster
-
-    # Weighted info gain (%), by fields_before
     monthly_totals = df2.groupby("month", as_index=False).agg(
         sum_fields_before=("fields_before", "sum"),
         sum_fields_after=("fields_after", "sum"),
+        total_fields_added=("fields_added", "sum"),
     )
     monthly_totals["weighted_info_gain_pct"] = (
         monthly_totals["sum_fields_after"] / monthly_totals["sum_fields_before"] - 1
     ) * 100
 
-    # Monthly aggregates
     out = (
         df2.groupby("month", as_index=False)
         .agg(
             avg_info_gain_pct=("info_gain_pct", "mean"),
-            avg_speed_impr_pct=("speed_impr_pct", "mean"),
-            avg_speed_delta_sec=("speed_delta_sec", "mean"),
-            total_fields_added=("fields_added", "sum"),
         )
         .merge(
-            monthly_totals[["month", "weighted_info_gain_pct"]], on="month", how="left"
+            monthly_totals[["month", "weighted_info_gain_pct", "total_fields_added"]],
+            on="month",
+            how="left",
         )
     )
-
     return out
 
 
-# -------------------- MENTORING (dept, type) --------------------
+# -------------------- MENTORING --------------------
 @register_kpi("mentoring")
 def compute_mentoring(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Expected columns:
-      session_id, date, dept, mentoring_type, mentor_hrs, team_time_saved_hrs
-    Returns monthly aggregates:
-      month, mentor_hrs_sum, team_saved_sum, avg_roi
-    """
     df2 = df.copy()
     for c in ["mentor_hrs", "team_time_saved_hrs"]:
         df2[c] = pd.to_numeric(df2[c], errors="coerce")
@@ -173,77 +141,58 @@ def compute_mentoring(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# -------------------- AI ENGAGEMENT (dept usage) --------------------
-@register_kpi("ai_engagement")
-def compute_ai_engagement(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Expected columns:
-      month, dept, active_users, ai_calls, survey_score
-    Returns monthly aggregates:
-      month, total_active_users, total_ai_calls, avg_survey
-    """
-    df2 = df.copy()
-    for c in ["active_users", "ai_calls", "survey_score"]:
-        if c in df2.columns:
-            df2[c] = pd.to_numeric(df2[c], errors="coerce")
-    out = df2.groupby("month", as_index=False).agg(
-        total_active_users=("active_users", "sum"),
-        total_ai_calls=("ai_calls", "sum"),
-        avg_survey=("survey_score", "mean"),
-    )
-    return out
-
-
-# -------------------- PROJECT MGMT (MVP delivery) --------------------
+# -------------------- PROJECT MGMT --------------------
 @register_kpi("project_mgmt")
 def compute_project_mgmt(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Expected columns:
-      project_name, dept, start_date, mvp_target_date, mvp_actual_date
-    Returns a row-per-project with computed fields:
-      mvp_cycle_days, on_time (1/0), month (from mvp_actual_date if present else NaT)
-    """
     df2 = df.copy()
     for c in ["start_date", "mvp_target_date", "mvp_actual_date"]:
         df2[c] = pd.to_datetime(df2[c], errors="coerce")
     df2["mvp_cycle_days"] = (df2["mvp_actual_date"] - df2["start_date"]).dt.days
-    df2["on_time"] = (df2["mvp_actual_date"].notna()) & (
-        df2["mvp_actual_date"] <= df2["mvp_target_date"]
-    )
-    df2["on_time"] = df2["on_time"].astype(int)
-    # month for trend (based on actual MVP delivery)
+    df2["on_time"] = (
+        (df2["mvp_actual_date"].notna())
+        & (df2["mvp_actual_date"] <= df2["mvp_target_date"])
+    ).astype(int)
     df2["month"] = df2["mvp_actual_date"].dt.to_period("M").astype("datetime64[ns]")
     return df2
 
 
-# -------------------- TICKETS (total in range handled in UI) --------------------
-@register_kpi("tickets")
-def compute_tickets(df: pd.DataFrame) -> pd.DataFrame:
-    return pd.DataFrame({"total_tickets_resolved": [len(df)]})
-
-
-# -------------------- ISSUES (per type monthly) --------------------
-@register_kpi("issues")
-def compute_issues(df: pd.DataFrame) -> pd.DataFrame:
+# -------------------- WORKLOG (tickets + issues) --------------------
+@register_kpi("worklog")
+def compute_worklog(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Inputs:
+      type (Ticket/Bug/Error), id, date_closed, time_consumed (hours)
+    Output:
+      one row per day with items_closed and time_consumed_sum (for charts)
+    """
     df2 = df.copy()
-    if "date_closed" in df2.columns:
-        df2["month"] = (
-            pd.to_datetime(df2["date_closed"], errors="coerce")
-            .dt.to_period("M")
+    df2["date_closed"] = pd.to_datetime(df2["date_closed"], errors="coerce")
+    df2["time_consumed"] = pd.to_numeric(
+        df2.get("time_consumed"), errors="coerce"
+    ).fillna(0.0)
+    if "type" in df2.columns:
+        mapping = {"ticket": "Ticket", "bug": "Bug", "error": "Error"}
+        df2["type"] = (
+            df2["type"]
             .astype(str)
+            .str.strip()
+            .str.lower()
+            .map(mapping)
+            .fillna(df2["type"])
         )
-    return df2.groupby(["month", "type"]).size().unstack(fill_value=0).reset_index()
+    df2 = df2.dropna(subset=["date_closed"])
+    df2["day"] = df2["date_closed"].dt.floor("D")
+
+    daily = df2.groupby("day", as_index=False).agg(
+        items_closed=("id", "count"),
+        time_consumed_sum=("time_consumed", "sum"),
+    )
+    return daily.sort_values("day")
 
 
-# -------------------- LEARNING (efficiency + profit) --------------------
+# -------------------- LEARNING --------------------
 @register_kpi("learning")
 def compute_learning(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Expected columns:
-      date, skill, implementations, usages, learning_hrs, applied_hrs, profit_over_legacy_pct
-    Returns per-month averages:
-      avg_efficiency, avg_profit_over_legacy_pct
-    """
     df2 = df.copy()
     for c in [
         "implementations",
@@ -265,20 +214,16 @@ def compute_learning(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# -------------------- TIME MGMT (DAILY) --------------------
 @register_kpi("time_mgmt")
 def compute_time_mgmt(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Expects:
-      week_start, kw, development, debugging_tickets, mentoring, devops, project_management, meetings
-    Returns per-week:
-      week_start (datetime), kw (str), total_hours, and % split per category
+    Inputs (daily):
+      date, development, debugging_tickets, mentoring, devops, project_management, meetings
+    Output: one row per day with totals and % split.
     """
     df2 = df.copy()
-    # Parse week_start if not already parsed
-    if not pd.api.types.is_datetime64_any_dtype(
-        df2.get("week_start", pd.Series([], dtype="datetime64[ns]"))
-    ):
-        df2["week_start"] = pd.to_datetime(df2["week_start"], errors="coerce")
+    df2["date"] = pd.to_datetime(df2["date"], errors="coerce")
 
     cats = [
         "development",
@@ -289,20 +234,16 @@ def compute_time_mgmt(df: pd.DataFrame) -> pd.DataFrame:
         "meetings",
     ]
     for c in cats:
-        df2[c] = pd.to_numeric(df2.get(c), errors="coerce")
+        df2[c] = pd.to_numeric(df2.get(c), errors="coerce").fillna(0)
 
     df2["total_hours"] = df2[cats].sum(axis=1)
-
-    # Percentages (safe: avoid div/0)
     for c in cats:
         df2[f"{c}_pct"] = (df2[c] / df2["total_hours"] * 100).where(
-            df2["total_hours"] > 0
+            df2["total_hours"] > 0, 0
         )
 
-    # Keep a clean weekly row (no further grouping; one row per week entry)
-    out_cols = ["week_start", "kw", "total_hours"] + cats + [f"{c}_pct" for c in cats]
-    out = df2[out_cols].sort_values("week_start")
-    return out
+    out_cols = ["date", "total_hours"] + cats + [f"{c}_pct" for c in cats]
+    return df2[out_cols].sort_values("date")
 
 
 # -------------------- helpers --------------------
@@ -316,7 +257,6 @@ def load_kpi(csv_path: str, parse_dates=None) -> pd.DataFrame:
         "start_date",
         "mvp_target_date",
         "mvp_actual_date",
-        "week_start",
     ]
     df_preview = pd.read_csv(csv_path, nrows=1)
     cols_to_parse = [col for col in suggested if col in df_preview.columns]

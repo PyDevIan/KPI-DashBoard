@@ -38,9 +38,9 @@ KPI_META: Dict[str, Dict] = {
         "source_csv": "worklog.csv",
     },
     "learning": {
-        "display_name": "Learning – Efficiency & Profit",
+        "display_name": "Learning – Efficiency & ROI",
         "unit": "ratio",
-        "description": "Applied/learning efficiency and average profit over legacy (%).",
+        "description": "Efficiency (applied/learning), application rate, time ROI, and average performance delta.",
         "source_csv": "learning.csv",
     },
     "time_mgmt": {
@@ -194,23 +194,51 @@ def compute_worklog(df: pd.DataFrame) -> pd.DataFrame:
 @register_kpi("learning")
 def compute_learning(df: pd.DataFrame) -> pd.DataFrame:
     df2 = df.copy()
+    # tolerate missing cols
     for c in [
-        "implementations",
-        "usages",
         "learning_hrs",
         "applied_hrs",
-        "profit_over_legacy_pct",
+        "applications",
+        "delta_performance_pct",
+        "time_saved_hrs",
+        "cost_eur",
     ]:
-        if c in df2.columns:
-            df2[c] = pd.to_numeric(df2[c], errors="coerce")
-    df2["month"] = (
-        pd.to_datetime(df2["date"], errors="coerce").dt.to_period("M").astype(str)
+        if c not in df2.columns:
+            df2[c] = 0
+        df2[c] = pd.to_numeric(df2[c], errors="coerce").fillna(0)
+
+    df2["date"] = pd.to_datetime(df2.get("date"), errors="coerce")
+    df2["month"] = df2["date"].dt.to_period("M").astype(str)
+
+    # core metrics
+    df2["efficiency"] = (
+        (df2["applied_hrs"] / df2["learning_hrs"]).replace([float("inf")], 0).fillna(0)
     )
-    df2["efficiency"] = df2["applied_hrs"] / df2["learning_hrs"]
+    df2["roi_time"] = (
+        (df2["time_saved_hrs"] / df2["learning_hrs"])
+        .replace([float("inf")], 0)
+        .fillna(0)
+    )
+    df2["delta_pct"] = pd.to_numeric(
+        df2["delta_performance_pct"], errors="coerce"
+    ).fillna(0)
+
+    # monthly aggregates
     out = df2.groupby("month", as_index=False).agg(
+        learning_hrs_sum=("learning_hrs", "sum"),
+        applied_hrs_sum=("applied_hrs", "sum"),
+        applications_sum=("applications", "sum"),
+        time_saved_sum=("time_saved_hrs", "sum"),
         avg_efficiency=("efficiency", "mean"),
-        avg_profit_over_legacy_pct=("profit_over_legacy_pct", "mean"),
+        avg_roi_time=("roi_time", "mean"),
+        avg_delta_pct=("delta_pct", "mean"),
     )
+    # derive application rate (apps per week in the month)
+    # (approx weeks = days_in_month/7)
+    month_start = pd.to_datetime(out["month"])
+    next_month = (month_start.dt.to_period("M") + 1).astype("datetime64[ns]")
+    days = (next_month - month_start).dt.days.clip(lower=1)
+    out["application_rate_pw"] = out["applications_sum"] / (days / 7.0)
     return out
 
 

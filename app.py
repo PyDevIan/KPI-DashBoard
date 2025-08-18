@@ -811,6 +811,21 @@ with st.form("append_form"):
                 "mvp_actual_date",
             ):
                 field_inputs[field] = st.date_input(field, value=date.today())
+            elif selected_csv_key in ["time_mgmt", "worklog"] and field in [
+                "development",
+                "debugging_tickets",
+                "mentoring",
+                "devops",
+                "project_management",
+                "meetings",
+                "time_consumed",
+            ]:
+                c1, c2 = st.columns(2)
+                hrs = c1.number_input(f"{field} (hours)", step=1, min_value=0, value=0)
+                mins = c2.number_input(
+                    f"{field} (minutes)", step=5, min_value=0, max_value=59, value=0
+                )
+                field_inputs[field] = hrs + mins / 60.0
             elif field == "month":
                 field_inputs[field] = st.date_input(field, value=date.today())
 
@@ -825,7 +840,6 @@ with st.form("append_form"):
                 field_inputs[field] = st.selectbox(field, list(APP_TYPES.keys()))
             elif selected_csv_key == "worklog" and field == "type":
                 field_inputs[field] = st.selectbox(field, WORKLOG_TYPES)
-    
 
             # Numerics
             elif field in (

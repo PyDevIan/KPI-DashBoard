@@ -136,6 +136,9 @@ def zero_fill_days(df: pd.DataFrame, date_col: str, start, end) -> pd.DataFrame:
     )
 
 
+
+
+
 # --- Sidebar filters ---
 st.sidebar.title("Data Status & Filters")
 start_date = st.sidebar.date_input("Start Date", value=date.today().replace(day=1))
@@ -173,6 +176,7 @@ if not selected_kpis:
         )
     )
     st.stop()
+
 
 st.title("🏆 Personal Career KPI Dashboard")
 

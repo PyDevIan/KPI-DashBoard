@@ -24,17 +24,12 @@ CSV_SCHEMAS = {
         "date_closed",
         "time_consumed",  # hours (float)
     ],
-    # Learning & Efficiency
+    # Learning (core skills)
     "learning": [
         "date",
         "core_skill",
         "skills_tech_tags",
         "time_spent_hrs",
-        "applied_hrs",
-        "applications",
-        "delta_performance_pct",
-        "time_saved_hrs",
-        "cost_eur",
         "notes",
     ],
     # Time management (daily)
@@ -209,7 +204,7 @@ for idx, kpi in enumerate(flag_kpis):
         continue
 
     if kpi == "learning":
-        # headline = efficiency & time ROI over the selected range
+        # headline = invested hours over the selected range
         lr = metrics.compute_kpi("learning", df_raw)
         if not lr.empty:
             lr["month"] = pd.to_datetime(lr["month"], errors="coerce")
@@ -217,18 +212,10 @@ for idx, kpi in enumerate(flag_kpis):
                 (lr["month"] >= pd.to_datetime(start_date))
                 & (lr["month"] <= pd.to_datetime(end_date))
             ]
-            eff = float(lr["avg_efficiency"].mean()) if "avg_efficiency" in lr else 0.0
-            roi = float(lr["avg_roi_time"].mean()) if "avg_roi_time" in lr else 0.0
             invested = (
                 float(lr["time_spent_sum"].sum()) if "time_spent_sum" in lr else 0.0
             )
             col.metric("Hours Invested", f"{invested:.1f} hrs")
-            col.metric(
-                "Learning Efficiency",
-                f"{eff:.2f} ratio",
-                help="applied_hrs / time_spent_hrs",
-            )
-            col.metric("Time ROI", f"{roi:.2f}x", help="time_saved_hrs / learning_hrs")
         else:
             col.info("No records")
         continue
@@ -383,43 +370,17 @@ for kpi in detail_kpis:
             & (lr["month"] <= pd.to_datetime(end_date))
         ].sort_values("month")
 
-        # Multicolor lines: Efficiency & Time ROI
-        line = (
-            alt.Chart(lr)
-            .transform_fold(["avg_efficiency", "avg_roi_time"], as_=["metric", "value"])
-            .mark_line(point=True)
-            .encode(
-                x=alt.X("month:T", title="Month"),
-                y=alt.Y("value:Q", title="Ratio"),
-                color=alt.Color(
-                    "metric:N", title="Metric", sort=["avg_efficiency", "avg_roi_time"]
-                ),
-                tooltip=["month:T", "metric:N", "value:Q"],
-            )
-            .properties(height=260)
-        )
-        st.subheader("Learning Efficiency & Time ROI")
-        st.altair_chart(line, use_container_width=True)
-
-        # Bars: Applications and Time Saved
         bars = (
             alt.Chart(lr)
-            .transform_fold(
-                ["applications_sum", "time_saved_sum", "time_spent_sum"],
-                as_=["metric", "value"],
-            )
             .mark_bar()
             .encode(
                 x=alt.X("month:T", title="Month"),
-                y=alt.Y("value:Q", title="Count / Hours"),
-                color=alt.Color(
-                    "metric:N", title="", sort=["applications_sum", "time_saved_sum"]
-                ),
-                tooltip=["month:T", "metric:N", "value:Q"],
+                y=alt.Y("time_spent_sum:Q", title="Hours Invested"),
+                tooltip=["month:T", "time_spent_sum:Q"],
             )
             .properties(height=260)
         )
-        st.subheader("Applications & Time Saved")
+        st.subheader("Learning Hours by Month")
         st.altair_chart(bars, use_container_width=True)
 
         by_skill = metrics.compute_learning_by_core_skill(df_raw)
@@ -448,7 +409,6 @@ for kpi in detail_kpis:
                 by_skill.groupby("core_skill", as_index=False)
                 .agg(
                     total_hours=("time_spent_sum", "sum"),
-                    total_applied=("applied_hrs_sum", "sum"),
                     technologies_added=("skills_tech_tags", lambda x: ", ".join(sorted({t.strip() for row in x.dropna() for t in str(row).split(",") if t.strip()}))),
                 )
                 .sort_values("total_hours", ascending=False)
@@ -461,24 +421,14 @@ for kpi in detail_kpis:
                 [
                     "month",
                     "time_spent_sum",
-                    "applied_hrs_sum",
-                    "applications_sum",
-                    "time_saved_sum",
-                    "avg_efficiency",
-                    "avg_roi_time",
-                    "avg_delta_pct",
-                    "application_rate_pw",
+                    "entries_count",
+                    "unique_tech_tags",
                 ]
             ].rename(
                 columns={
                     "time_spent_sum": "Time Spent (hrs)",
-                    "applied_hrs_sum": "Applied (hrs)",
-                    "applications_sum": "Applications",
-                    "time_saved_sum": "Time Saved (hrs)",
-                    "avg_efficiency": "Efficiency",
-                    "avg_roi_time": "Time ROI",
-                    "avg_delta_pct": "Δ Performance (%)",
-                    "application_rate_pw": "Apps / week",
+                    "entries_count": "Learning Entries",
+                    "unique_tech_tags": "Unique Tech/Skill Tags",
                 }
             )
         )
@@ -661,7 +611,6 @@ with st.form("append_form"):
             # Numerics
             elif field in (
                 "time_spent_hrs",
-                "applied_hrs",
                 "development",
                 "debugging_tickets",
                 "mentoring",
@@ -669,10 +618,6 @@ with st.form("append_form"):
                 "project_management",
                 "meetings",
                 "time_consumed",
-                "applications",
-                "delta_performance_pct",
-                "time_saved_hrs",
-                "cost_eur",
             ):
                 field_inputs[field] = st.number_input(field, step=1.0, min_value=0.0)
             else:

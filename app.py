@@ -10,32 +10,6 @@ DATA_DIR = "data"
 
 # --- CSV Schema Map (for data-entry form) ---
 CSV_SCHEMAS = {
-    "apps": [
-        "app_id",
-        "app_name",
-        "app_type",
-        "idea_date",
-        "deploy_date",
-        "month",
-        "time_before_hrs",
-        "time_after_hrs",
-        "frequency_per_month",
-    ],
-    "data_collection": [
-        "proc_id",
-        "proc_name",
-        "month",
-        "fields_before",
-        "fields_after",  # Speed cols removed
-    ],
-    "mentoring": [
-        "session_id",
-        "date",
-        "dept",
-        "mentoring_type",
-        "mentor_hrs",
-        "team_time_saved_hrs",
-    ],
     "project_mgmt": [
         "project_name",
         "dept",
@@ -85,20 +59,11 @@ DEPT_OPTIONS = [
     "RND",
     "BIO",
 ]
-MENTORING_TYPES = ["prompt_eng", "nocode_guidance", "ai_assistant_util"]
-APP_TYPES = {
-    "Simple Data Collection/Procedure": "simple",
-    "AI Full App": "ai_full",
-    "AI Assistant App": "ai_assistant",
-}
 WORKLOG_TYPES = ["Ticket", "Bug", "Error"]
 
 # KPIs that always show as top flag cards (order matters)
 CRITICAL_KPIS = [
-    "apps",
     "worklog",
-    "data_collection",
-    "mentoring",
     "project_mgmt",
     "time_mgmt",
     "learning",
@@ -232,15 +197,6 @@ for idx, kpi in enumerate(flag_kpis):
         col.metric(label="Total Time Consumed", value=f"{total_time:.1f} hours")
         continue
 
-    # ---- DATA COLLECTION (Info Gain only): headline = weighted info gain avg
-    if kpi == "data_collection" and not df_kpi.empty:
-        value = df_kpi["weighted_info_gain_pct"].mean(skipna=True)
-        col.metric(
-            label=f"{label} (Weighted Avg)",
-            value=f"{value:.2f} %",
-            help="Weighted by fields_before; higher is better",
-        )
-        continue
     if kpi == "learning":
         # headline = efficiency & time ROI over the selected range
         lr = metrics.compute_kpi("learning", df_raw)
@@ -260,58 +216,6 @@ for idx, kpi in enumerate(flag_kpis):
             col.metric("Time ROI", f"{roi:.2f}x", help="time_saved_hrs / learning_hrs")
         else:
             col.info("No records")
-        continue
-
-    # ---- APPS: headline = total saved; plus avg dev speed
-    if kpi == "apps":
-        total_hours_saved = (
-            float(df_kpi["total_saved"].sum())
-            if ("total_saved" in df_kpi.columns)
-            else 0.0
-        )
-        col.metric(
-            label=f"{label} – Total Saved",
-            value=f"{total_hours_saved:.1f} hours",
-            help="Sum of (time_before - time_after) * frequency across apps in range",
-        )
-
-        if set(["deploy_date", "idea_date"]).issubset(df_raw.columns):
-            sp = df_raw.copy()
-            sp["deploy_date"] = pd.to_datetime(sp["deploy_date"], errors="coerce")
-            sp["idea_date"] = pd.to_datetime(sp["idea_date"], errors="coerce")
-            sp = sp.dropna(subset=["deploy_date", "idea_date"])
-            sp = sp[
-                (sp["deploy_date"] >= pd.to_datetime(start_date))
-                & (sp["deploy_date"] <= pd.to_datetime(end_date))
-            ]
-            if not sp.empty:
-                sp["dev_days"] = (sp["deploy_date"] - sp["idea_date"]).dt.days
-                col.metric(
-                    label="Avg Dev Speed (All Types)",
-                    value=f"{float(sp['dev_days'].mean()):.1f} days",
-                )
-        continue
-
-    # ---- MENTORING: headline = ROI
-    if kpi == "mentoring":
-        if set(["date", "mentor_hrs", "team_time_saved_hrs"]).issubset(df_raw.columns):
-            m = df_raw.copy()
-            m["date"] = pd.to_datetime(m["date"], errors="coerce")
-            m = m[
-                (m["date"] >= pd.to_datetime(start_date))
-                & (m["date"] <= pd.to_datetime(end_date))
-            ]
-            if not m.empty:
-                mentor_hrs = float(
-                    pd.to_numeric(m["mentor_hrs"], errors="coerce").sum()
-                )
-                team_saved = float(
-                    pd.to_numeric(m["team_time_saved_hrs"], errors="coerce").sum()
-                )
-                roi = (team_saved / mentor_hrs) if mentor_hrs > 0 else 0.0
-                col.metric(label="Mentoring ROI", value=f"{roi:.2f} ratio", help=help_)
-            else:
-                col.info("No records")
         continue
 
     # ---- PROJECT MGMT: headline = projects running (only here; not in details)
@@ -530,143 +434,6 @@ for kpi in detail_kpis:
         )
         continue
 
-    # ---- Data Collection (Info Gain only): weighted vs average (two-color line)
-    if kpi == "data_collection":
-        d = metrics.compute_kpi(kpi, df_raw)
-        if not d.empty:
-            d["month"] = pd.to_datetime(d["month"], errors="coerce")
-            d = d[
-                (d["month"] >= pd.to_datetime(start_date))
-                & (d["month"] <= pd.to_datetime(end_date))
-            ][["month", "avg_info_gain_pct", "weighted_info_gain_pct"]].sort_values(
-                "month"
-            )
-            d_long = d.melt("month", var_name="series", value_name="value")
-            chart = (
-                alt.Chart(d_long)
-                .mark_line(point=True)
-                .encode(
-                    x=alt.X("month:T", title="Month"),
-                    y=alt.Y("value:Q", title="Info Gain (%)"),
-                    color=alt.Color(
-                        "series:N",
-                        title="Series",
-                        sort=["weighted_info_gain_pct", "avg_info_gain_pct"],
-                        legend=alt.Legend(orient="top"),
-                    ),
-                    tooltip=["month:T", "series:N", "value:Q"],
-                )
-                .properties(height=260)
-            )
-            st.altair_chart(chart, use_container_width=True)
-            st.dataframe(
-                d.rename(
-                    columns={
-                        "avg_info_gain_pct": "Avg Info Gain (%)",
-                        "weighted_info_gain_pct": "Weighted Info Gain (%)",
-                    }
-                )
-            )
-        else:
-            st.info("No records")
-        continue
-
-    # ---- Apps: monthly saved + 3-month rolling avg
-    if kpi == "apps":
-        df_apps = metrics.compute_kpi("apps", df_raw)
-        if not df_apps.empty:
-            df_apps["month"] = pd.to_datetime(df_apps["month"], errors="coerce")
-            df_apps = df_apps[
-                (df_apps["month"] >= pd.to_datetime(start_date))
-                & (df_apps["month"] <= pd.to_datetime(end_date))
-            ].sort_values("month")
-            df_apps["saved_ma3"] = (
-                df_apps["total_saved"].rolling(3, min_periods=1).mean()
-            )
-
-            line1 = (
-                alt.Chart(df_apps)
-                .mark_line(point=True)
-                .encode(
-                    x=alt.X("month:T", title="Month"),
-                    y=alt.Y("total_saved:Q", title="Hours Saved"),
-                    tooltip=["month:T", "total_saved:Q"],
-                )
-            )
-            line2 = (
-                alt.Chart(df_apps)
-                .mark_line(strokeDash=[4, 4])
-                .encode(
-                    x="month:T", y="saved_ma3:Q", tooltip=["month:T", "saved_ma3:Q"]
-                )
-            )
-            st.subheader("Hours Saved (Monthly & 3-mo avg)")
-            st.altair_chart(
-                (line1 + line2).properties(height=260), use_container_width=True
-            )
-        else:
-            st.info("No records")
-
-        # per-type dev speed (extra insight)
-        if set(["deploy_date", "idea_date", "app_type"]).issubset(df_raw.columns):
-            sp = df_raw.copy()
-            sp["deploy_date"] = pd.to_datetime(sp["deploy_date"], errors="coerce")
-            sp["idea_date"] = pd.to_datetime(sp["idea_date"], errors="coerce")
-            sp = sp.dropna(subset=["deploy_date", "idea_date", "app_type"])
-            sp = sp[
-                (sp["deploy_date"] >= pd.to_datetime(start_date))
-                & (sp["deploy_date"] <= pd.to_datetime(end_date))
-            ]
-            if not sp.empty:
-                sp["dev_days"] = (sp["deploy_date"] - sp["idea_date"]).dt.days
-                type_labels = {
-                    "simple": "Simple Data Collection/Procedure",
-                    "ai_full": "AI Full App",
-                    "ai_assistant": "AI Assistant App",
-                }
-                sp["app_type_label"] = (
-                    sp["app_type"].map(type_labels).fillna(sp["app_type"])
-                )
-                per_type = sp.groupby("app_type_label", as_index=False).agg(
-                    avg_dev_days=("dev_days", "mean")
-                )
-                st.subheader("Avg Dev Speed by App Type (days)")
-                st.bar_chart(per_type.set_index("app_type_label"))
-                st.dataframe(per_type.sort_values("avg_dev_days"))
-        continue
-
-    # ---- Mentoring: department/type breakdowns
-    if kpi == "mentoring":
-        m = df_raw.copy()
-        m["date"] = pd.to_datetime(m["date"], errors="coerce")
-        m = m[
-            (m["date"] >= pd.to_datetime(start_date))
-            & (m["date"] <= pd.to_datetime(end_date))
-        ]
-        if not m.empty:
-            m["mentor_hrs"] = pd.to_numeric(m["mentor_hrs"], errors="coerce")
-            m["team_time_saved_hrs"] = pd.to_numeric(
-                m["team_time_saved_hrs"], errors="coerce"
-            )
-            per_dept = m.groupby("dept", as_index=False).agg(
-                mentor_hrs=("mentor_hrs", "sum"),
-                team_saved=("team_time_saved_hrs", "sum"),
-            )
-            st.subheader("Per-Department Mentoring")
-            if not per_dept.empty:
-                st.bar_chart(per_dept.set_index("dept")[["mentor_hrs", "team_saved"]])
-                st.dataframe(per_dept.sort_values("team_saved", ascending=False))
-
-            per_type = m.groupby("mentoring_type", as_index=False).agg(
-                mentor_hrs=("mentor_hrs", "sum"),
-                team_saved=("team_time_saved_hrs", "sum"),
-            )
-            st.subheader("Per-Type Mentoring")
-            st.dataframe(per_type.sort_values("team_saved", ascending=False))
-        else:
-            st.info("No mentoring sessions in selected range")
-        continue
-
     # ---- Project Mgmt: MVPs bars + cycle-days line
     if kpi == "project_mgmt":
         pm = df_raw.copy()
@@ -834,31 +601,15 @@ with st.form("append_form"):
                 field_inputs[field] = st.date_input(field, value=date.today())
 
             # Selects
-            elif selected_csv_key == "mentoring" and field == "dept":
-                field_inputs[field] = st.selectbox(field, DEPT_OPTIONS)
-            elif selected_csv_key == "mentoring" and field == "mentoring_type":
-                field_inputs[field] = st.selectbox(field, MENTORING_TYPES)
             elif selected_csv_key == "project_mgmt" and field == "dept":
                 field_inputs[field] = st.selectbox(field, DEPT_OPTIONS)
-            elif selected_csv_key == "apps" and field == "app_type":
-                field_inputs[field] = st.selectbox(field, list(APP_TYPES.keys()))
             elif selected_csv_key == "worklog" and field == "type":
                 field_inputs[field] = st.selectbox(field, WORKLOG_TYPES)
 
             # Numerics
             elif field in (
-                "fields_before",
-                "fields_after",
-                "time_before_hrs",
-                "time_after_hrs",
-                "frequency_per_month",
                 "learning_hrs",
                 "applied_hrs",
-                "mentor_hrs",
-                "team_time_saved_hrs",
-                "implementations",
-                "usages",
-                "profit_over_legacy_pct",
                 "development",
                 "debugging_tickets",
                 "mentoring",
@@ -892,8 +643,6 @@ with st.form("append_form"):
                         field_inputs[k] = v.strftime("%Y-%m-%d")
                 if k == "month" and hasattr(v, "strftime"):
                     field_inputs[k] = v.strftime("%Y-%m")
-                if k == "app_type":
-                    field_inputs[k] = APP_TYPES.get(v, v)
 
             csv_path = os.path.join(DATA_DIR, f"{selected_csv_key}.csv")
             df_new = pd.DataFrame([field_inputs])

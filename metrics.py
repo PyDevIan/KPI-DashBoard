@@ -20,9 +20,9 @@ KPI_META: Dict[str, Dict] = {
         "source_csv": "worklog.csv",
     },
     "learning": {
-        "display_name": "Learning – Efficiency & ROI",
+        "display_name": "Learning – Core Skills & ROI",
         "unit": "ratio",
-        "description": "Efficiency (applied/learning), application rate, time ROI, and average performance delta.",
+        "description": "Track hours invested per core skill, skill/tech tags learned, efficiency (applied/time), and time ROI.",
         "source_csv": "learning.csv",
     },
     "time_mgmt": {
@@ -95,9 +95,17 @@ def compute_worklog(df: pd.DataFrame) -> pd.DataFrame:
 @register_kpi("learning")
 def compute_learning(df: pd.DataFrame) -> pd.DataFrame:
     df2 = df.copy()
+    if "time_spent_hrs" not in df2.columns:
+        # Backward compatibility with old schema
+        df2["time_spent_hrs"] = df2.get("learning_hrs", 0)
+    if "core_skill" not in df2.columns:
+        df2["core_skill"] = "Uncategorized"
+    if "skills_tech_tags" not in df2.columns:
+        df2["skills_tech_tags"] = ""
+
     # tolerate missing cols
     for c in [
-        "learning_hrs",
+        "time_spent_hrs",
         "applied_hrs",
         "applications",
         "delta_performance_pct",
@@ -113,10 +121,12 @@ def compute_learning(df: pd.DataFrame) -> pd.DataFrame:
 
     # core metrics
     df2["efficiency"] = (
-        (df2["applied_hrs"] / df2["learning_hrs"]).replace([float("inf")], 0).fillna(0)
+        (df2["applied_hrs"] / df2["time_spent_hrs"])
+        .replace([float("inf")], 0)
+        .fillna(0)
     )
     df2["roi_time"] = (
-        (df2["time_saved_hrs"] / df2["learning_hrs"])
+        (df2["time_saved_hrs"] / df2["time_spent_hrs"])
         .replace([float("inf")], 0)
         .fillna(0)
     )
@@ -126,7 +136,7 @@ def compute_learning(df: pd.DataFrame) -> pd.DataFrame:
 
     # monthly aggregates
     out = df2.groupby("month", as_index=False).agg(
-        learning_hrs_sum=("learning_hrs", "sum"),
+        time_spent_sum=("time_spent_hrs", "sum"),
         applied_hrs_sum=("applied_hrs", "sum"),
         applications_sum=("applications", "sum"),
         time_saved_sum=("time_saved_hrs", "sum"),
@@ -141,6 +151,33 @@ def compute_learning(df: pd.DataFrame) -> pd.DataFrame:
     days = (next_month - month_start).dt.days.clip(lower=1)
     out["application_rate_pw"] = out["applications_sum"] / (days / 7.0)
     return out
+
+
+def compute_learning_by_core_skill(df: pd.DataFrame) -> pd.DataFrame:
+    df2 = df.copy()
+    if "time_spent_hrs" not in df2.columns:
+        df2["time_spent_hrs"] = df2.get("learning_hrs", 0)
+    if "core_skill" not in df2.columns:
+        df2["core_skill"] = "Uncategorized"
+    if "skills_tech_tags" not in df2.columns:
+        df2["skills_tech_tags"] = ""
+
+    df2["date"] = pd.to_datetime(df2.get("date"), errors="coerce")
+    df2["month"] = df2["date"].dt.to_period("M").astype(str)
+    for c in ["time_spent_hrs", "applied_hrs", "applications", "time_saved_hrs"]:
+        df2[c] = pd.to_numeric(df2.get(c), errors="coerce").fillna(0)
+
+    return (
+        df2.groupby(["month", "core_skill"], as_index=False)
+        .agg(
+            time_spent_sum=("time_spent_hrs", "sum"),
+            applied_hrs_sum=("applied_hrs", "sum"),
+            applications_sum=("applications", "sum"),
+            time_saved_sum=("time_saved_hrs", "sum"),
+            skills_tech_tags=("skills_tech_tags", lambda x: ", ".join(x.dropna().astype(str))),
+        )
+        .sort_values(["month", "core_skill"])
+    )
 
 
 # -------------------- TIME MGMT (DAILY) --------------------

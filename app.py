@@ -27,13 +27,15 @@ CSV_SCHEMAS = {
     # Learning & Efficiency
     "learning": [
         "date",
-        "skill",  # NEW (optional)
-        "learning_hrs",
+        "core_skill",
+        "skills_tech_tags",
+        "time_spent_hrs",
         "applied_hrs",
-        "applications",  # NEW
-        "delta_performance_pct",  # NEW
-        "time_saved_hrs",  # NEW
-        "cost_eur",  # NEW (optional)
+        "applications",
+        "delta_performance_pct",
+        "time_saved_hrs",
+        "cost_eur",
+        "notes",
     ],
     # Time management (daily)
     "time_mgmt": [
@@ -60,6 +62,15 @@ DEPT_OPTIONS = [
     "BIO",
 ]
 WORKLOG_TYPES = ["Ticket", "Bug", "Error"]
+CORE_SKILL_OPTIONS = [
+    "AI/ML engineering",
+    "Backend development",
+    "Frontend development",
+    "Data/MLOps",
+    "Deploy/Cloud",
+    "Lifecycle",
+    "Project Management",
+]
 
 # KPIs that always show as top flag cards (order matters)
 CRITICAL_KPIS = [
@@ -208,10 +219,14 @@ for idx, kpi in enumerate(flag_kpis):
             ]
             eff = float(lr["avg_efficiency"].mean()) if "avg_efficiency" in lr else 0.0
             roi = float(lr["avg_roi_time"].mean()) if "avg_roi_time" in lr else 0.0
+            invested = (
+                float(lr["time_spent_sum"].sum()) if "time_spent_sum" in lr else 0.0
+            )
+            col.metric("Hours Invested", f"{invested:.1f} hrs")
             col.metric(
                 "Learning Efficiency",
                 f"{eff:.2f} ratio",
-                help="applied_hrs / learning_hrs",
+                help="applied_hrs / time_spent_hrs",
             )
             col.metric("Time ROI", f"{roi:.2f}x", help="time_saved_hrs / learning_hrs")
         else:
@@ -390,7 +405,8 @@ for kpi in detail_kpis:
         bars = (
             alt.Chart(lr)
             .transform_fold(
-                ["applications_sum", "time_saved_sum"], as_=["metric", "value"]
+                ["applications_sum", "time_saved_sum", "time_spent_sum"],
+                as_=["metric", "value"],
             )
             .mark_bar()
             .encode(
@@ -406,11 +422,45 @@ for kpi in detail_kpis:
         st.subheader("Applications & Time Saved")
         st.altair_chart(bars, use_container_width=True)
 
+        by_skill = metrics.compute_learning_by_core_skill(df_raw)
+        if not by_skill.empty:
+            by_skill["month"] = pd.to_datetime(by_skill["month"], errors="coerce")
+            by_skill = by_skill[
+                (by_skill["month"] >= pd.to_datetime(start_date))
+                & (by_skill["month"] <= pd.to_datetime(end_date))
+            ].sort_values(["month", "core_skill"])
+
+            skill_hours = (
+                alt.Chart(by_skill)
+                .mark_bar()
+                .encode(
+                    x=alt.X("month:T", title="Month"),
+                    y=alt.Y("time_spent_sum:Q", title="Hours Invested"),
+                    color=alt.Color("core_skill:N", title="Core Skill"),
+                    tooltip=["month:T", "core_skill:N", "time_spent_sum:Q"],
+                )
+                .properties(height=300)
+            )
+            st.subheader("Hours Invested by Core Skill")
+            st.altair_chart(skill_hours, use_container_width=True)
+
+            skill_summary = (
+                by_skill.groupby("core_skill", as_index=False)
+                .agg(
+                    total_hours=("time_spent_sum", "sum"),
+                    total_applied=("applied_hrs_sum", "sum"),
+                    technologies_added=("skills_tech_tags", lambda x: ", ".join(sorted({t.strip() for row in x.dropna() for t in str(row).split(",") if t.strip()}))),
+                )
+                .sort_values("total_hours", ascending=False)
+            )
+            st.subheader("Core Skills Summary")
+            st.dataframe(skill_summary)
+
         st.dataframe(
             lr[
                 [
                     "month",
-                    "learning_hrs_sum",
+                    "time_spent_sum",
                     "applied_hrs_sum",
                     "applications_sum",
                     "time_saved_sum",
@@ -421,7 +471,7 @@ for kpi in detail_kpis:
                 ]
             ].rename(
                 columns={
-                    "learning_hrs_sum": "Learning (hrs)",
+                    "time_spent_sum": "Time Spent (hrs)",
                     "applied_hrs_sum": "Applied (hrs)",
                     "applications_sum": "Applications",
                     "time_saved_sum": "Time Saved (hrs)",
@@ -605,10 +655,12 @@ with st.form("append_form"):
                 field_inputs[field] = st.selectbox(field, DEPT_OPTIONS)
             elif selected_csv_key == "worklog" and field == "type":
                 field_inputs[field] = st.selectbox(field, WORKLOG_TYPES)
+            elif selected_csv_key == "learning" and field == "core_skill":
+                field_inputs[field] = st.selectbox(field, CORE_SKILL_OPTIONS)
 
             # Numerics
             elif field in (
-                "learning_hrs",
+                "time_spent_hrs",
                 "applied_hrs",
                 "development",
                 "debugging_tickets",

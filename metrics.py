@@ -6,24 +6,6 @@ KPI_FUNCTIONS: Dict[str, Callable[[pd.DataFrame], pd.DataFrame]] = {}
 
 # Metadata for each KPI (display name, unit, description, source)
 KPI_META: Dict[str, Dict] = {
-    "apps": {
-        "display_name": "Apps – Time Saved & Dev Speed",
-        "unit": "hours",
-        "description": "Total time saved by apps (hours) and average development speed per app type.",
-        "source_csv": "apps.csv",
-    },
-    "data_collection": {
-        "display_name": "Information Gain",
-        "unit": "%",
-        "description": "Average & weighted information gain (% fields↑) per month.",
-        "source_csv": "data_collection.csv",
-    },
-    "mentoring": {
-        "display_name": "Mentoring Impact (by Dept & Type)",
-        "unit": "hours",
-        "description": "Mentor hours, team hours saved, and ROI (saved / mentor) across departments and mentoring types.",
-        "source_csv": "mentoring.csv",
-    },
     "project_mgmt": {
         "display_name": "Project Management (MVP Delivery)",
         "unit": "count",
@@ -58,87 +40,6 @@ def register_kpi(name: str):
         return func
 
     return decorator
-
-
-# -------------------- APPS (time saved monthly) --------------------
-@register_kpi("apps")
-def compute_apps(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Expects:
-      app_id, app_name, app_type, idea_date, deploy_date, month,
-      time_before_hrs, time_after_hrs, frequency_per_month
-    Returns: month, total_saved
-    """
-    df2 = df.copy()
-    for c in ("time_before_hrs", "time_after_hrs", "frequency_per_month"):
-        df2[c] = pd.to_numeric(df2.get(c), errors="coerce")
-    df2["time_saved"] = (df2["time_before_hrs"] - df2["time_after_hrs"]) * df2[
-        "frequency_per_month"
-    ]
-    out = df2.groupby("month", as_index=False).agg(total_saved=("time_saved", "sum"))
-    return out
-
-
-# --------- DATA COLLECTION (Info Gain only) ---------
-@register_kpi("data_collection")
-def compute_data_collection(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Expects:
-      proc_id, proc_name, month, fields_before, fields_after
-    Returns per-month:
-      avg_info_gain_pct, weighted_info_gain_pct, total_fields_added
-    """
-    df2 = df.copy()
-    for c in ["fields_before", "fields_after"]:
-        if c not in df2.columns:
-            df2[c] = pd.NA
-        df2[c] = pd.to_numeric(df2[c], errors="coerce")
-
-    valid_fields = df2["fields_before"] > 0
-    df2.loc[valid_fields, "info_gain_pct"] = (
-        df2["fields_after"] / df2["fields_before"] - 1
-    ) * 100
-    df2["fields_added"] = df2["fields_after"] - df2["fields_before"]
-
-    monthly_totals = df2.groupby("month", as_index=False).agg(
-        sum_fields_before=("fields_before", "sum"),
-        sum_fields_after=("fields_after", "sum"),
-        total_fields_added=("fields_added", "sum"),
-    )
-    monthly_totals["weighted_info_gain_pct"] = (
-        monthly_totals["sum_fields_after"] / monthly_totals["sum_fields_before"] - 1
-    ) * 100
-
-    out = (
-        df2.groupby("month", as_index=False)
-        .agg(
-            avg_info_gain_pct=("info_gain_pct", "mean"),
-        )
-        .merge(
-            monthly_totals[["month", "weighted_info_gain_pct", "total_fields_added"]],
-            on="month",
-            how="left",
-        )
-    )
-    return out
-
-
-# -------------------- MENTORING --------------------
-@register_kpi("mentoring")
-def compute_mentoring(df: pd.DataFrame) -> pd.DataFrame:
-    df2 = df.copy()
-    for c in ["mentor_hrs", "team_time_saved_hrs"]:
-        df2[c] = pd.to_numeric(df2[c], errors="coerce")
-    df2["month"] = (
-        pd.to_datetime(df2["date"], errors="coerce").dt.to_period("M").astype(str)
-    )
-    df2["roi"] = df2["team_time_saved_hrs"] / df2["mentor_hrs"]
-    out = df2.groupby("month", as_index=False).agg(
-        mentor_hrs_sum=("mentor_hrs", "sum"),
-        team_saved_sum=("team_time_saved_hrs", "sum"),
-        avg_roi=("roi", "mean"),
-    )
-    return out
 
 
 # -------------------- PROJECT MGMT --------------------

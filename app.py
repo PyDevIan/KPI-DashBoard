@@ -120,7 +120,7 @@ for fp in glob.glob(os.path.join(DATA_DIR, "*.csv")):
 
 
 # --- Helpers & cache ---
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=60)
 def cached_load(path: str) -> pd.DataFrame:
     return metrics.load_kpi(path)
 

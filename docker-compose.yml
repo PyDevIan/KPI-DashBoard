@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  streamlit-app:
+    build: .
+    container_name: streamlit_metrics
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data  # persist CSV data
+    environment:
+      STREAMLIT_SERVER_HEADLESS: "true"
+      STREAMLIT_SERVER_ENABLECORS: "false"
+      STREAMLIT_SERVER_ENABLEXsrfProtection: "false"
+      PYTHONUNBUFFERED: "1"
+    restart: unless-stopped

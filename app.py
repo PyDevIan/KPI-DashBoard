@@ -447,14 +447,6 @@ for kpi in detail_kpis:
         st.subheader("Core Skills Summary")
         st.dataframe(core_skill_summary)
 
-        st.dataframe(
-            daily_learning.rename(
-                columns={
-                    "day": "Date",
-                    "time_spent_sum": "Time Spent (hrs)",
-                }
-            )
-        )
         continue
 
     # ---- Project Mgmt: MVPs bars + cycle-days line

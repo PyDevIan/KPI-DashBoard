@@ -34,6 +34,18 @@ KPI_META: Dict[str, Dict] = {
 }
 
 
+
+
+def _normalize_date_series(series: pd.Series) -> pd.Series:
+    """Parse mixed date inputs and normalize to datetime64.
+
+    Handles ISO values (YYYY-MM-DD) and common spreadsheet-style values
+    like 1/12/2025 (interpreted as day/month/year).
+    """
+    iso = pd.to_datetime(series, errors="coerce", format="%Y-%m-%d")
+    dmy = pd.to_datetime(series, errors="coerce", dayfirst=True)
+    return iso.combine_first(dmy)
+
 def register_kpi(name: str):
     def decorator(func: Callable[[pd.DataFrame], pd.DataFrame]):
         KPI_FUNCTIONS[name] = func
@@ -220,9 +232,19 @@ def load_kpi(csv_path: str, parse_dates=None) -> pd.DataFrame:
         "mvp_target_date",
         "mvp_actual_date",
     ]
-    df_preview = pd.read_csv(csv_path, nrows=1)
-    cols_to_parse = [col for col in suggested if col in df_preview.columns]
-    return pd.read_csv(csv_path, parse_dates=cols_to_parse)
+    df = pd.read_csv(csv_path)
+
+    for col in suggested:
+        if col in df.columns:
+            df[col] = _normalize_date_series(df[col])
+
+    # Keep month as YYYY-MM string for consistency where applicable.
+    if "month" in df.columns:
+        month_ts = pd.to_datetime(df["month"], errors="coerce", format="%Y-%m")
+        month_ts = month_ts.combine_first(pd.to_datetime(df["month"], errors="coerce", dayfirst=True))
+        df["month"] = month_ts.dt.strftime("%Y-%m").where(month_ts.notna(), df["month"])
+
+    return df
 
 
 def compute_kpi(name: str, df: pd.DataFrame) -> pd.DataFrame:

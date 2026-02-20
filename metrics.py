@@ -7,9 +7,9 @@ KPI_FUNCTIONS: Dict[str, Callable[[pd.DataFrame], pd.DataFrame]] = {}
 # Metadata for each KPI (display name, unit, description, source)
 KPI_META: Dict[str, Dict] = {
     "project_mgmt": {
-        "display_name": "Project Management (MVP Delivery)",
+        "display_name": "Project Management + Head of AI",
         "unit": "count",
-        "description": "Projects running, average MVP cycle (days), and on-time delivery rate.",
+        "description": "Simple delivery/execution and business-impact view from one project_mgmt CSV.",
         "source_csv": "project_mgmt.csv",
     },
     # Unified KPI
@@ -28,11 +28,23 @@ KPI_META: Dict[str, Dict] = {
     "time_mgmt": {
         "display_name": "Time Management (Daily Allocation)",
         "unit": "hours",
-        "description": "Daily allocation of hours across Development, Debugging/Tickets, Mentoring, DevOps, Project Management, and Meetings.",
+        "description": "Daily allocation of hours across Development, Debugging/Tickets, Learning, DevOps, Project Management, and Meetings.",
         "source_csv": "time_mgmt.csv",
     },
 }
 
+
+
+
+def _normalize_date_series(series: pd.Series) -> pd.Series:
+    """Parse mixed date inputs and normalize to datetime64.
+
+    Handles ISO values (YYYY-MM-DD) and common spreadsheet-style values
+    like 1/12/2025 (interpreted as day/month/year).
+    """
+    iso = pd.to_datetime(series, errors="coerce", format="%Y-%m-%d")
+    dmy = pd.to_datetime(series, errors="coerce", dayfirst=True)
+    return iso.combine_first(dmy)
 
 def register_kpi(name: str):
     def decorator(func: Callable[[pd.DataFrame], pd.DataFrame]):
@@ -47,13 +59,29 @@ def register_kpi(name: str):
 def compute_project_mgmt(df: pd.DataFrame) -> pd.DataFrame:
     df2 = df.copy()
     for c in ["start_date", "mvp_target_date", "mvp_actual_date"]:
+        if c not in df2.columns:
+            df2[c] = pd.NaT
         df2[c] = pd.to_datetime(df2[c], errors="coerce")
+
+    for c in ["project_name", "dept", "owner", "status", "ai_use_case", "business_impact_note"]:
+        if c not in df2.columns:
+            df2[c] = ""
+        df2[c] = df2[c].fillna("")
+
+    for c in ["execution_score", "business_impact_score"]:
+        if c not in df2.columns:
+            df2[c] = 0
+        df2[c] = pd.to_numeric(df2[c], errors="coerce").fillna(0)
+
     df2["mvp_cycle_days"] = (df2["mvp_actual_date"] - df2["start_date"]).dt.days
     df2["on_time"] = (
         (df2["mvp_actual_date"].notna())
         & (df2["mvp_actual_date"] <= df2["mvp_target_date"])
     ).astype(int)
-    df2["month"] = df2["mvp_actual_date"].dt.to_period("M").astype("datetime64[ns]")
+    df2["schedule_slip_days"] = (df2["mvp_actual_date"] - df2["mvp_target_date"]).dt.days
+
+    timeline_date = df2["mvp_actual_date"].combine_first(df2["mvp_target_date"])
+    df2["month"] = timeline_date.dt.to_period("M").astype("datetime64[ns]")
     return df2
 
 
@@ -102,15 +130,22 @@ def compute_learning(df: pd.DataFrame) -> pd.DataFrame:
         df2["core_skill"] = "Uncategorized"
     if "skills_tech_tags" not in df2.columns:
         df2["skills_tech_tags"] = ""
+    if "date" not in df2.columns:
+        return pd.DataFrame(
+            columns=["month", "time_spent_sum", "entries_count", "unique_tech_tags"]
+        )
 
-    if "time_spent_hrs" not in df2.columns:
-        df2["time_spent_hrs"] = 0
     df2["time_spent_hrs"] = pd.to_numeric(df2["time_spent_hrs"], errors="coerce").fillna(
         0
     )
 
-    df2["date"] = pd.to_datetime(df2.get("date"), errors="coerce")
+    df2["date"] = pd.to_datetime(df2["date"], errors="coerce")
     df2 = df2.dropna(subset=["date"])
+    if df2.empty:
+        return pd.DataFrame(
+            columns=["month", "time_spent_sum", "entries_count", "unique_tech_tags"]
+        )
+
     df2["month"] = df2["date"].dt.to_period("M").astype(str)
 
     # monthly aggregates
@@ -140,13 +175,20 @@ def compute_learning_by_core_skill(df: pd.DataFrame) -> pd.DataFrame:
         df2["core_skill"] = "Uncategorized"
     if "skills_tech_tags" not in df2.columns:
         df2["skills_tech_tags"] = ""
+    if "date" not in df2.columns:
+        return pd.DataFrame(
+            columns=["month", "core_skill", "time_spent_sum", "skills_tech_tags"]
+        )
 
-    df2["date"] = pd.to_datetime(df2.get("date"), errors="coerce")
+    df2["date"] = pd.to_datetime(df2["date"], errors="coerce")
     df2 = df2.dropna(subset=["date"])
+    if df2.empty:
+        return pd.DataFrame(
+            columns=["month", "core_skill", "time_spent_sum", "skills_tech_tags"]
+        )
+
     df2["month"] = df2["date"].dt.to_period("M").astype(str)
-    df2["time_spent_hrs"] = pd.to_numeric(
-        df2.get("time_spent_hrs"), errors="coerce"
-    ).fillna(0)
+    df2["time_spent_hrs"] = pd.to_numeric(df2["time_spent_hrs"], errors="coerce").fillna(0)
 
     return (
         df2.groupby(["month", "core_skill"], as_index=False)
@@ -163,16 +205,20 @@ def compute_learning_by_core_skill(df: pd.DataFrame) -> pd.DataFrame:
 def compute_time_mgmt(df: pd.DataFrame) -> pd.DataFrame:
     """
     Inputs (daily):
-      date, development, debugging_tickets, mentoring, devops, project_management, meetings
+      date, development, debugging_tickets, learning, devops, project_management, meetings
     Output: one row per day with totals and % split.
     """
     df2 = df.copy()
     df2["date"] = pd.to_datetime(df2["date"], errors="coerce")
 
+    # Backward compatibility with older CSV schema
+    if "learning" not in df2.columns and "mentoring" in df2.columns:
+        df2["learning"] = df2["mentoring"]
+
     cats = [
         "development",
         "debugging_tickets",
-        "mentoring",
+        "learning",
         "devops",
         "project_management",
         "meetings",
@@ -202,9 +248,19 @@ def load_kpi(csv_path: str, parse_dates=None) -> pd.DataFrame:
         "mvp_target_date",
         "mvp_actual_date",
     ]
-    df_preview = pd.read_csv(csv_path, nrows=1)
-    cols_to_parse = [col for col in suggested if col in df_preview.columns]
-    return pd.read_csv(csv_path, parse_dates=cols_to_parse)
+    df = pd.read_csv(csv_path)
+
+    for col in suggested:
+        if col in df.columns:
+            df[col] = _normalize_date_series(df[col])
+
+    # Keep month as YYYY-MM string for consistency where applicable.
+    if "month" in df.columns:
+        month_ts = pd.to_datetime(df["month"], errors="coerce", format="%Y-%m")
+        month_ts = month_ts.combine_first(pd.to_datetime(df["month"], errors="coerce", dayfirst=True))
+        df["month"] = month_ts.dt.strftime("%Y-%m").where(month_ts.notna(), df["month"])
+
+    return df
 
 
 def compute_kpi(name: str, df: pd.DataFrame) -> pd.DataFrame:

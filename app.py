@@ -13,9 +13,15 @@ CSV_SCHEMAS = {
     "project_mgmt": [
         "project_name",
         "dept",
+        "owner",
+        "status",
+        "ai_use_case",
         "start_date",
         "mvp_target_date",
         "mvp_actual_date",
+        "execution_score",
+        "business_impact_score",
+        "business_impact_note",
     ],
     # Unified Tickets + Issues
     "worklog": [
@@ -37,7 +43,7 @@ CSV_SCHEMAS = {
         "date",
         "development",
         "debugging_tickets",
-        "mentoring",
+        "learning",
         "devops",
         "project_management",
         "meetings",
@@ -56,6 +62,7 @@ DEPT_OPTIONS = [
     "RND",
     "BIO",
 ]
+PROJECT_STATUS_OPTIONS = ["Planned", "In Progress", "Delivered", "On Hold", "Cancelled"]
 WORKLOG_TYPES = ["Ticket", "Bug", "Error"]
 CORE_SKILL_OPTIONS = [
     "AI/ML engineering",
@@ -360,110 +367,136 @@ for kpi in detail_kpis:
         continue
 
     if kpi == "learning":
-        lr = metrics.compute_kpi("learning", df_raw)
-        if lr.empty:
+        learning_raw = df_raw.copy()
+        learning_raw["date"] = pd.to_datetime(learning_raw.get("date"), errors="coerce")
+        learning_raw["time_spent_hrs"] = pd.to_numeric(
+            learning_raw.get("time_spent_hrs", learning_raw.get("learning_hrs", 0)),
+            errors="coerce",
+        ).fillna(0.0)
+        if "core_skill" not in learning_raw.columns:
+            learning_raw["core_skill"] = "Uncategorized"
+        learning_raw["core_skill"] = learning_raw["core_skill"].fillna("Uncategorized")
+
+        learning_filtered = learning_raw.dropna(subset=["date"])
+        learning_filtered = learning_filtered[
+            (learning_filtered["date"] >= pd.to_datetime(start_date))
+            & (learning_filtered["date"] <= pd.to_datetime(end_date))
+        ].copy()
+
+        if learning_filtered.empty:
             st.info("No records")
             continue
-        lr["month"] = pd.to_datetime(lr["month"], errors="coerce")
-        lr = lr[
-            (lr["month"] >= pd.to_datetime(start_date))
-            & (lr["month"] <= pd.to_datetime(end_date))
-        ].sort_values("month")
 
-        bars = (
-            alt.Chart(lr)
+        daily_learning = (
+            learning_filtered.assign(day=learning_filtered["date"].dt.floor("D"))
+            .groupby("day", as_index=False)
+            .agg(time_spent_sum=("time_spent_hrs", "sum"))
+            .sort_values("day")
+        )
+
+        daily_chart = (
+            alt.Chart(daily_learning)
             .mark_bar()
             .encode(
-                x=alt.X("month:T", title="Month"),
+                x=alt.X("day:T", title="Day"),
                 y=alt.Y("time_spent_sum:Q", title="Hours Invested"),
-                tooltip=["month:T", "time_spent_sum:Q"],
+                tooltip=["day:T", "time_spent_sum:Q"],
             )
             .properties(height=260)
         )
-        st.subheader("Learning Hours by Month")
-        st.altair_chart(bars, use_container_width=True)
+        st.subheader("Learning Hours by Day")
+        st.altair_chart(daily_chart, use_container_width=True)
 
-        by_skill = metrics.compute_learning_by_core_skill(df_raw)
-        if not by_skill.empty:
-            by_skill["month"] = pd.to_datetime(by_skill["month"], errors="coerce")
-            by_skill = by_skill[
-                (by_skill["month"] >= pd.to_datetime(start_date))
-                & (by_skill["month"] <= pd.to_datetime(end_date))
-            ].sort_values(["month", "core_skill"])
-
-            skill_hours = (
-                alt.Chart(by_skill)
-                .mark_bar()
-                .encode(
-                    x=alt.X("month:T", title="Month"),
-                    y=alt.Y("time_spent_sum:Q", title="Hours Invested"),
-                    color=alt.Color("core_skill:N", title="Core Skill"),
-                    tooltip=["month:T", "core_skill:N", "time_spent_sum:Q"],
-                )
-                .properties(height=300)
-            )
-            st.subheader("Hours Invested by Core Skill")
-            st.altair_chart(skill_hours, use_container_width=True)
-
-            skill_summary = (
-                by_skill.groupby("core_skill", as_index=False)
-                .agg(
-                    total_hours=("time_spent_sum", "sum"),
-                    technologies_added=("skills_tech_tags", lambda x: ", ".join(sorted({t.strip() for row in x.dropna() for t in str(row).split(",") if t.strip()}))),
-                )
-                .sort_values("total_hours", ascending=False)
-            )
-            st.subheader("Core Skills Summary")
-            st.dataframe(skill_summary)
-
-        st.dataframe(
-            lr[
-                [
-                    "month",
-                    "time_spent_sum",
-                    "entries_count",
-                    "unique_tech_tags",
-                ]
-            ].rename(
-                columns={
-                    "time_spent_sum": "Time Spent (hrs)",
-                    "entries_count": "Learning Entries",
-                    "unique_tech_tags": "Unique Tech/Skill Tags",
-                }
-            )
+        by_skill_total = (
+            learning_filtered.groupby("core_skill", as_index=False)
+            .agg(total_hours=("time_spent_hrs", "sum"))
+            .sort_values("total_hours", ascending=False)
         )
+        core_skill_chart = (
+            alt.Chart(by_skill_total)
+            .mark_bar()
+            .encode(
+                x=alt.X("core_skill:N", title="Core Skill", sort="-y"),
+                y=alt.Y("total_hours:Q", title="Hours Invested"),
+                color=alt.Color("core_skill:N", title="Core Skill"),
+                tooltip=["core_skill:N", "total_hours:Q"],
+            )
+            .properties(height=300)
+        )
+        st.subheader("Hours Invested by Core Skill")
+        st.altair_chart(core_skill_chart, use_container_width=True)
+
+        skills_for_summary = learning_raw.dropna(subset=["date"]).copy()
+        if "skills_tech_tags" not in skills_for_summary.columns:
+            skills_for_summary["skills_tech_tags"] = ""
+        skills_for_summary["skills_tech_tags"] = skills_for_summary["skills_tech_tags"].fillna("")
+        core_skill_summary = (
+            skills_for_summary.groupby("core_skill", as_index=False)
+            .agg(
+                technologies_acquired=(
+                    "skills_tech_tags",
+                    lambda x: [
+                        t
+                        for t in sorted(
+                            {
+                                tag.strip()
+                                for row in x.astype(str)
+                                for tag in row.split(",")
+                                if tag.strip()
+                            }
+                        )
+                    ],
+                )
+            )
+            .sort_values("core_skill")
+        )
+
+        st.subheader("Core Skills Summary")
+        st.dataframe(core_skill_summary)
+
         continue
 
-    # ---- Project Mgmt: MVPs bars + cycle-days line
+    # ---- Project Mgmt + Head of AI: simple delivery/execution + business impact
     if kpi == "project_mgmt":
-        pm = df_raw.copy()
-        for c in ["start_date", "mvp_target_date", "mvp_actual_date"]:
-            pm[c] = pd.to_datetime(pm[c], errors="coerce")
-        delivered = pm.dropna(subset=["mvp_actual_date"])
-        delivered = delivered[
-            (delivered["mvp_actual_date"] >= pd.to_datetime(start_date))
-            & (delivered["mvp_actual_date"] <= pd.to_datetime(end_date))
-        ]
-        if not delivered.empty:
-            delivered["month"] = (
-                delivered["mvp_actual_date"].dt.to_period("M").astype("datetime64[ns]")
+        pm = metrics.compute_kpi("project_mgmt", df_raw)
+        if pm.empty:
+            st.info("No records")
+            continue
+
+        in_scope = pm[
+            (
+                (pm["mvp_target_date"] >= pd.to_datetime(start_date))
+                & (pm["mvp_target_date"] <= pd.to_datetime(end_date))
             )
-            delivered["mvp_cycle_days"] = (
-                delivered["mvp_actual_date"] - delivered["start_date"]
-            ).dt.days
-            delivered["on_time"] = (
-                delivered["mvp_actual_date"] <= delivered["mvp_target_date"]
-            ).astype(int)
+            | (
+                (pm["mvp_actual_date"] >= pd.to_datetime(start_date))
+                & (pm["mvp_actual_date"] <= pd.to_datetime(end_date))
+            )
+        ].copy()
+
+        if in_scope.empty:
+            st.info("No project records in selected range")
+            continue
+
+        delivered = in_scope[in_scope["mvp_actual_date"].notna()].copy()
+        on_time_rate = float(delivered["on_time"].mean() * 100) if not delivered.empty else 0.0
+        avg_cycle_days = float(delivered["mvp_cycle_days"].mean()) if not delivered.empty else 0.0
+        avg_execution = float(in_scope["execution_score"].mean()) if "execution_score" in in_scope else 0.0
+        avg_impact = float(in_scope["business_impact_score"].mean()) if "business_impact_score" in in_scope else 0.0
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Delivered", f"{len(delivered)}")
+        c2.metric("On-Time Delivery", f"{on_time_rate:.1f}%")
+        c3.metric("Execution Score (1-5)", f"{avg_execution:.2f}")
+        c4.metric("Business Impact (1-5)", f"{avg_impact:.2f}")
+
+        if not delivered.empty:
             monthly = (
-                delivered.groupby("month", as_index=False)
-                .agg(
-                    mvps=("project_name", "count"),
-                    avg_cycle_days=("mvp_cycle_days", "mean"),
-                    on_time_rate=("on_time", "mean"),
-                )
+                delivered.assign(month=delivered["mvp_actual_date"].dt.to_period("M").dt.to_timestamp())
+                .groupby("month", as_index=False)
+                .agg(mvps=("project_name", "count"), avg_cycle_days=("mvp_cycle_days", "mean"))
                 .sort_values("month")
             )
-
             bars = (
                 alt.Chart(monthly)
                 .mark_bar()
@@ -482,13 +515,49 @@ for kpi in detail_kpis:
                     tooltip=["month:T", "avg_cycle_days:Q"],
                 )
             )
-            st.subheader("MVPs & Avg Cycle")
-            st.altair_chart(
-                (bars + line).properties(height=260), use_container_width=True
+            st.subheader("Delivery & Execution Trend")
+            st.altair_chart((bars + line).properties(height=260), use_container_width=True)
+
+        impact_by_use_case = (
+            in_scope.groupby("ai_use_case", as_index=False)
+            .agg(avg_impact=("business_impact_score", "mean"), projects=("project_name", "count"))
+            .sort_values("avg_impact", ascending=False)
+        )
+        impact_by_use_case = impact_by_use_case[impact_by_use_case["ai_use_case"].astype(str).str.strip() != ""]
+        if not impact_by_use_case.empty:
+            st.subheader("AI Use Cases – Business Impact")
+            impact_chart = (
+                alt.Chart(impact_by_use_case)
+                .mark_bar()
+                .encode(
+                    x=alt.X("ai_use_case:N", title="AI Use Case", sort="-y"),
+                    y=alt.Y("avg_impact:Q", title="Avg Impact Score (1-5)"),
+                    color=alt.Color("ai_use_case:N", title="AI Use Case"),
+                    tooltip=["ai_use_case:N", "avg_impact:Q", "projects:Q"],
+                )
+                .properties(height=260)
             )
-            st.dataframe(monthly)
-        else:
-            st.info("No MVP deliveries in selected range")
+            st.altair_chart(impact_chart, use_container_width=True)
+
+        st.subheader("Project Management / Head of AI Summary")
+        st.dataframe(
+            in_scope[
+                [
+                    "project_name",
+                    "dept",
+                    "owner",
+                    "status",
+                    "ai_use_case",
+                    "start_date",
+                    "mvp_target_date",
+                    "mvp_actual_date",
+                    "on_time",
+                    "execution_score",
+                    "business_impact_score",
+                    "business_impact_note",
+                ]
+            ].sort_values("mvp_target_date", ascending=False)
+        )
         continue
 
     # ---- Time Mgmt: stacked bars + pie
@@ -512,7 +581,7 @@ for kpi in detail_kpis:
         cats = [
             "development",
             "debugging_tickets",
-            "mentoring",
+            "learning",
             "devops",
             "project_management",
             "meetings",
@@ -572,7 +641,11 @@ with st.form("append_form"):
     if selected_csv_key in CSV_SCHEMAS:
         for field in CSV_SCHEMAS[selected_csv_key]:
             # Dates
-            if field in (
+            if selected_csv_key == "project_mgmt" and field == "mvp_actual_date":
+                field_inputs[field] = st.text_input(
+                    field, placeholder="Optional (YYYY-MM-DD for delivered projects)"
+                )
+            elif field in (
                 "date",
                 "date_closed",
                 "idea_date",
@@ -585,7 +658,7 @@ with st.form("append_form"):
             elif selected_csv_key in ["time_mgmt", "worklog"] and field in [
                 "development",
                 "debugging_tickets",
-                "mentoring",
+                "learning",
                 "devops",
                 "project_management",
                 "meetings",
@@ -603,17 +676,24 @@ with st.form("append_form"):
             # Selects
             elif selected_csv_key == "project_mgmt" and field == "dept":
                 field_inputs[field] = st.selectbox(field, DEPT_OPTIONS)
+            elif selected_csv_key == "project_mgmt" and field == "status":
+                field_inputs[field] = st.selectbox(field, PROJECT_STATUS_OPTIONS)
             elif selected_csv_key == "worklog" and field == "type":
                 field_inputs[field] = st.selectbox(field, WORKLOG_TYPES)
             elif selected_csv_key == "learning" and field == "core_skill":
                 field_inputs[field] = st.selectbox(field, CORE_SKILL_OPTIONS)
 
             # Numerics
+            elif selected_csv_key == "project_mgmt" and field in (
+                "execution_score",
+                "business_impact_score",
+            ):
+                field_inputs[field] = st.number_input(field, min_value=1.0, max_value=5.0, step=1.0, value=3.0)
             elif field in (
                 "time_spent_hrs",
                 "development",
                 "debugging_tickets",
-                "mentoring",
+                "learning",
                 "devops",
                 "project_management",
                 "meetings",
@@ -638,6 +718,8 @@ with st.form("append_form"):
                 ):
                     if hasattr(v, "strftime"):
                         field_inputs[k] = v.strftime("%Y-%m-%d")
+                    elif k == "mvp_actual_date" and isinstance(v, str):
+                        field_inputs[k] = v.strip()
                 if k == "month" and hasattr(v, "strftime"):
                     field_inputs[k] = v.strftime("%Y-%m")
 

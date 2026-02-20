@@ -28,7 +28,7 @@ KPI_META: Dict[str, Dict] = {
     "time_mgmt": {
         "display_name": "Time Management (Daily Allocation)",
         "unit": "hours",
-        "description": "Daily allocation of hours across Development, Debugging/Tickets, Mentoring, DevOps, Project Management, and Meetings.",
+        "description": "Daily allocation of hours across Development, Debugging/Tickets, Learning, DevOps, Project Management, and Meetings.",
         "source_csv": "time_mgmt.csv",
     },
 }
@@ -163,16 +163,20 @@ def compute_learning_by_core_skill(df: pd.DataFrame) -> pd.DataFrame:
 def compute_time_mgmt(df: pd.DataFrame) -> pd.DataFrame:
     """
     Inputs (daily):
-      date, development, debugging_tickets, mentoring, devops, project_management, meetings
+      date, development, debugging_tickets, learning, devops, project_management, meetings
     Output: one row per day with totals and % split.
     """
     df2 = df.copy()
     df2["date"] = pd.to_datetime(df2["date"], errors="coerce")
 
+    # Backward compatibility with older CSV schema
+    if "learning" not in df2.columns and "mentoring" in df2.columns:
+        df2["learning"] = df2["mentoring"]
+
     cats = [
         "development",
         "debugging_tickets",
-        "mentoring",
+        "learning",
         "devops",
         "project_management",
         "meetings",

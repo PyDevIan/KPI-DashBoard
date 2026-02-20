@@ -411,6 +411,7 @@ for kpi in detail_kpis:
             .encode(
                 x=alt.X("core_skill:N", title="Core Skill", sort="-y"),
                 y=alt.Y("total_hours:Q", title="Hours Invested"),
+                color=alt.Color("core_skill:N", title="Core Skill"),
                 tooltip=["core_skill:N", "total_hours:Q"],
             )
             .properties(height=300)
@@ -418,8 +419,33 @@ for kpi in detail_kpis:
         st.subheader("Hours Invested by Core Skill")
         st.altair_chart(core_skill_chart, use_container_width=True)
 
+        skills_for_summary = learning_raw.dropna(subset=["date"]).copy()
+        if "skills_tech_tags" not in skills_for_summary.columns:
+            skills_for_summary["skills_tech_tags"] = ""
+        skills_for_summary["skills_tech_tags"] = skills_for_summary["skills_tech_tags"].fillna("")
+        core_skill_summary = (
+            skills_for_summary.groupby("core_skill", as_index=False)
+            .agg(
+                technologies_acquired=(
+                    "skills_tech_tags",
+                    lambda x: [
+                        t
+                        for t in sorted(
+                            {
+                                tag.strip()
+                                for row in x.astype(str)
+                                for tag in row.split(",")
+                                if tag.strip()
+                            }
+                        )
+                    ],
+                )
+            )
+            .sort_values("core_skill")
+        )
+
         st.subheader("Core Skills Summary")
-        st.dataframe(by_skill_total)
+        st.dataframe(core_skill_summary)
 
         st.dataframe(
             daily_learning.rename(

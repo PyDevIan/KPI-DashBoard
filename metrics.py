@@ -28,7 +28,7 @@ KPI_META: Dict[str, Dict] = {
     "time_mgmt": {
         "display_name": "Time Management (Daily Allocation)",
         "unit": "hours",
-        "description": "Daily allocation of hours across Development, Debugging/Tickets, Mentoring, DevOps, Project Management, and Meetings.",
+        "description": "Daily allocation of hours across Development, Debugging/Tickets, Learning, DevOps, Project Management, and Meetings.",
         "source_csv": "time_mgmt.csv",
     },
 }
@@ -102,15 +102,22 @@ def compute_learning(df: pd.DataFrame) -> pd.DataFrame:
         df2["core_skill"] = "Uncategorized"
     if "skills_tech_tags" not in df2.columns:
         df2["skills_tech_tags"] = ""
+    if "date" not in df2.columns:
+        return pd.DataFrame(
+            columns=["month", "time_spent_sum", "entries_count", "unique_tech_tags"]
+        )
 
-    if "time_spent_hrs" not in df2.columns:
-        df2["time_spent_hrs"] = 0
     df2["time_spent_hrs"] = pd.to_numeric(df2["time_spent_hrs"], errors="coerce").fillna(
         0
     )
 
-    df2["date"] = pd.to_datetime(df2.get("date"), errors="coerce")
+    df2["date"] = pd.to_datetime(df2["date"], errors="coerce")
     df2 = df2.dropna(subset=["date"])
+    if df2.empty:
+        return pd.DataFrame(
+            columns=["month", "time_spent_sum", "entries_count", "unique_tech_tags"]
+        )
+
     df2["month"] = df2["date"].dt.to_period("M").astype(str)
 
     # monthly aggregates
@@ -140,13 +147,20 @@ def compute_learning_by_core_skill(df: pd.DataFrame) -> pd.DataFrame:
         df2["core_skill"] = "Uncategorized"
     if "skills_tech_tags" not in df2.columns:
         df2["skills_tech_tags"] = ""
+    if "date" not in df2.columns:
+        return pd.DataFrame(
+            columns=["month", "core_skill", "time_spent_sum", "skills_tech_tags"]
+        )
 
-    df2["date"] = pd.to_datetime(df2.get("date"), errors="coerce")
+    df2["date"] = pd.to_datetime(df2["date"], errors="coerce")
     df2 = df2.dropna(subset=["date"])
+    if df2.empty:
+        return pd.DataFrame(
+            columns=["month", "core_skill", "time_spent_sum", "skills_tech_tags"]
+        )
+
     df2["month"] = df2["date"].dt.to_period("M").astype(str)
-    df2["time_spent_hrs"] = pd.to_numeric(
-        df2.get("time_spent_hrs"), errors="coerce"
-    ).fillna(0)
+    df2["time_spent_hrs"] = pd.to_numeric(df2["time_spent_hrs"], errors="coerce").fillna(0)
 
     return (
         df2.groupby(["month", "core_skill"], as_index=False)
@@ -163,16 +177,20 @@ def compute_learning_by_core_skill(df: pd.DataFrame) -> pd.DataFrame:
 def compute_time_mgmt(df: pd.DataFrame) -> pd.DataFrame:
     """
     Inputs (daily):
-      date, development, debugging_tickets, mentoring, devops, project_management, meetings
+      date, development, debugging_tickets, learning, devops, project_management, meetings
     Output: one row per day with totals and % split.
     """
     df2 = df.copy()
     df2["date"] = pd.to_datetime(df2["date"], errors="coerce")
 
+    # Backward compatibility with older CSV schema
+    if "learning" not in df2.columns and "mentoring" in df2.columns:
+        df2["learning"] = df2["mentoring"]
+
     cats = [
         "development",
         "debugging_tickets",
-        "mentoring",
+        "learning",
         "devops",
         "project_management",
         "meetings",

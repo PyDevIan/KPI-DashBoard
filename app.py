@@ -37,7 +37,7 @@ CSV_SCHEMAS = {
         "date",
         "development",
         "debugging_tickets",
-        "mentoring",
+        "learning",
         "devops",
         "project_management",
         "meetings",
@@ -360,78 +360,93 @@ for kpi in detail_kpis:
         continue
 
     if kpi == "learning":
-        lr = metrics.compute_kpi("learning", df_raw)
-        if lr.empty:
+        learning_raw = df_raw.copy()
+        learning_raw["date"] = pd.to_datetime(learning_raw.get("date"), errors="coerce")
+        learning_raw["time_spent_hrs"] = pd.to_numeric(
+            learning_raw.get("time_spent_hrs", learning_raw.get("learning_hrs", 0)),
+            errors="coerce",
+        ).fillna(0.0)
+        if "core_skill" not in learning_raw.columns:
+            learning_raw["core_skill"] = "Uncategorized"
+        learning_raw["core_skill"] = learning_raw["core_skill"].fillna("Uncategorized")
+
+        learning_filtered = learning_raw.dropna(subset=["date"])
+        learning_filtered = learning_filtered[
+            (learning_filtered["date"] >= pd.to_datetime(start_date))
+            & (learning_filtered["date"] <= pd.to_datetime(end_date))
+        ].copy()
+
+        if learning_filtered.empty:
             st.info("No records")
             continue
-        lr["month"] = pd.to_datetime(lr["month"], errors="coerce")
-        lr = lr[
-            (lr["month"] >= pd.to_datetime(start_date))
-            & (lr["month"] <= pd.to_datetime(end_date))
-        ].sort_values("month")
 
-        bars = (
-            alt.Chart(lr)
+        daily_learning = (
+            learning_filtered.assign(day=learning_filtered["date"].dt.floor("D"))
+            .groupby("day", as_index=False)
+            .agg(time_spent_sum=("time_spent_hrs", "sum"))
+            .sort_values("day")
+        )
+
+        daily_chart = (
+            alt.Chart(daily_learning)
             .mark_bar()
             .encode(
-                x=alt.X("month:T", title="Month"),
+                x=alt.X("day:T", title="Day"),
                 y=alt.Y("time_spent_sum:Q", title="Hours Invested"),
-                tooltip=["month:T", "time_spent_sum:Q"],
+                tooltip=["day:T", "time_spent_sum:Q"],
             )
             .properties(height=260)
         )
-        st.subheader("Learning Hours by Month")
-        st.altair_chart(bars, use_container_width=True)
+        st.subheader("Learning Hours by Day")
+        st.altair_chart(daily_chart, use_container_width=True)
 
-        by_skill = metrics.compute_learning_by_core_skill(df_raw)
-        if not by_skill.empty:
-            by_skill["month"] = pd.to_datetime(by_skill["month"], errors="coerce")
-            by_skill = by_skill[
-                (by_skill["month"] >= pd.to_datetime(start_date))
-                & (by_skill["month"] <= pd.to_datetime(end_date))
-            ].sort_values(["month", "core_skill"])
-
-            skill_hours = (
-                alt.Chart(by_skill)
-                .mark_bar()
-                .encode(
-                    x=alt.X("month:T", title="Month"),
-                    y=alt.Y("time_spent_sum:Q", title="Hours Invested"),
-                    color=alt.Color("core_skill:N", title="Core Skill"),
-                    tooltip=["month:T", "core_skill:N", "time_spent_sum:Q"],
-                )
-                .properties(height=300)
-            )
-            st.subheader("Hours Invested by Core Skill")
-            st.altair_chart(skill_hours, use_container_width=True)
-
-            skill_summary = (
-                by_skill.groupby("core_skill", as_index=False)
-                .agg(
-                    total_hours=("time_spent_sum", "sum"),
-                    technologies_added=("skills_tech_tags", lambda x: ", ".join(sorted({t.strip() for row in x.dropna() for t in str(row).split(",") if t.strip()}))),
-                )
-                .sort_values("total_hours", ascending=False)
-            )
-            st.subheader("Core Skills Summary")
-            st.dataframe(skill_summary)
-
-        st.dataframe(
-            lr[
-                [
-                    "month",
-                    "time_spent_sum",
-                    "entries_count",
-                    "unique_tech_tags",
-                ]
-            ].rename(
-                columns={
-                    "time_spent_sum": "Time Spent (hrs)",
-                    "entries_count": "Learning Entries",
-                    "unique_tech_tags": "Unique Tech/Skill Tags",
-                }
-            )
+        by_skill_total = (
+            learning_filtered.groupby("core_skill", as_index=False)
+            .agg(total_hours=("time_spent_hrs", "sum"))
+            .sort_values("total_hours", ascending=False)
         )
+        core_skill_chart = (
+            alt.Chart(by_skill_total)
+            .mark_bar()
+            .encode(
+                x=alt.X("core_skill:N", title="Core Skill", sort="-y"),
+                y=alt.Y("total_hours:Q", title="Hours Invested"),
+                color=alt.Color("core_skill:N", title="Core Skill"),
+                tooltip=["core_skill:N", "total_hours:Q"],
+            )
+            .properties(height=300)
+        )
+        st.subheader("Hours Invested by Core Skill")
+        st.altair_chart(core_skill_chart, use_container_width=True)
+
+        skills_for_summary = learning_raw.dropna(subset=["date"]).copy()
+        if "skills_tech_tags" not in skills_for_summary.columns:
+            skills_for_summary["skills_tech_tags"] = ""
+        skills_for_summary["skills_tech_tags"] = skills_for_summary["skills_tech_tags"].fillna("")
+        core_skill_summary = (
+            skills_for_summary.groupby("core_skill", as_index=False)
+            .agg(
+                technologies_acquired=(
+                    "skills_tech_tags",
+                    lambda x: [
+                        t
+                        for t in sorted(
+                            {
+                                tag.strip()
+                                for row in x.astype(str)
+                                for tag in row.split(",")
+                                if tag.strip()
+                            }
+                        )
+                    ],
+                )
+            )
+            .sort_values("core_skill")
+        )
+
+        st.subheader("Core Skills Summary")
+        st.dataframe(core_skill_summary)
+
         continue
 
     # ---- Project Mgmt: MVPs bars + cycle-days line
@@ -512,7 +527,7 @@ for kpi in detail_kpis:
         cats = [
             "development",
             "debugging_tickets",
-            "mentoring",
+            "learning",
             "devops",
             "project_management",
             "meetings",
@@ -585,7 +600,7 @@ with st.form("append_form"):
             elif selected_csv_key in ["time_mgmt", "worklog"] and field in [
                 "development",
                 "debugging_tickets",
-                "mentoring",
+                "learning",
                 "devops",
                 "project_management",
                 "meetings",
@@ -613,7 +628,7 @@ with st.form("append_form"):
                 "time_spent_hrs",
                 "development",
                 "debugging_tickets",
-                "mentoring",
+                "learning",
                 "devops",
                 "project_management",
                 "meetings",

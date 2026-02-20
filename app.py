@@ -13,9 +13,15 @@ CSV_SCHEMAS = {
     "project_mgmt": [
         "project_name",
         "dept",
+        "owner",
+        "status",
+        "ai_use_case",
         "start_date",
         "mvp_target_date",
         "mvp_actual_date",
+        "execution_score",
+        "business_impact_score",
+        "business_impact_note",
     ],
     # Unified Tickets + Issues
     "worklog": [
@@ -56,6 +62,7 @@ DEPT_OPTIONS = [
     "RND",
     "BIO",
 ]
+PROJECT_STATUS_OPTIONS = ["Planned", "In Progress", "Delivered", "On Hold", "Cancelled"]
 WORKLOG_TYPES = ["Ticket", "Bug", "Error"]
 CORE_SKILL_OPTIONS = [
     "AI/ML engineering",
@@ -449,36 +456,47 @@ for kpi in detail_kpis:
 
         continue
 
-    # ---- Project Mgmt: MVPs bars + cycle-days line
+    # ---- Project Mgmt + Head of AI: simple delivery/execution + business impact
     if kpi == "project_mgmt":
-        pm = df_raw.copy()
-        for c in ["start_date", "mvp_target_date", "mvp_actual_date"]:
-            pm[c] = pd.to_datetime(pm[c], errors="coerce")
-        delivered = pm.dropna(subset=["mvp_actual_date"])
-        delivered = delivered[
-            (delivered["mvp_actual_date"] >= pd.to_datetime(start_date))
-            & (delivered["mvp_actual_date"] <= pd.to_datetime(end_date))
-        ]
-        if not delivered.empty:
-            delivered["month"] = (
-                delivered["mvp_actual_date"].dt.to_period("M").astype("datetime64[ns]")
+        pm = metrics.compute_kpi("project_mgmt", df_raw)
+        if pm.empty:
+            st.info("No records")
+            continue
+
+        in_scope = pm[
+            (
+                (pm["mvp_target_date"] >= pd.to_datetime(start_date))
+                & (pm["mvp_target_date"] <= pd.to_datetime(end_date))
             )
-            delivered["mvp_cycle_days"] = (
-                delivered["mvp_actual_date"] - delivered["start_date"]
-            ).dt.days
-            delivered["on_time"] = (
-                delivered["mvp_actual_date"] <= delivered["mvp_target_date"]
-            ).astype(int)
+            | (
+                (pm["mvp_actual_date"] >= pd.to_datetime(start_date))
+                & (pm["mvp_actual_date"] <= pd.to_datetime(end_date))
+            )
+        ].copy()
+
+        if in_scope.empty:
+            st.info("No project records in selected range")
+            continue
+
+        delivered = in_scope[in_scope["mvp_actual_date"].notna()].copy()
+        on_time_rate = float(delivered["on_time"].mean() * 100) if not delivered.empty else 0.0
+        avg_cycle_days = float(delivered["mvp_cycle_days"].mean()) if not delivered.empty else 0.0
+        avg_execution = float(in_scope["execution_score"].mean()) if "execution_score" in in_scope else 0.0
+        avg_impact = float(in_scope["business_impact_score"].mean()) if "business_impact_score" in in_scope else 0.0
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Delivered", f"{len(delivered)}")
+        c2.metric("On-Time Delivery", f"{on_time_rate:.1f}%")
+        c3.metric("Execution Score (1-5)", f"{avg_execution:.2f}")
+        c4.metric("Business Impact (1-5)", f"{avg_impact:.2f}")
+
+        if not delivered.empty:
             monthly = (
-                delivered.groupby("month", as_index=False)
-                .agg(
-                    mvps=("project_name", "count"),
-                    avg_cycle_days=("mvp_cycle_days", "mean"),
-                    on_time_rate=("on_time", "mean"),
-                )
+                delivered.assign(month=delivered["mvp_actual_date"].dt.to_period("M").dt.to_timestamp())
+                .groupby("month", as_index=False)
+                .agg(mvps=("project_name", "count"), avg_cycle_days=("mvp_cycle_days", "mean"))
                 .sort_values("month")
             )
-
             bars = (
                 alt.Chart(monthly)
                 .mark_bar()
@@ -497,13 +515,49 @@ for kpi in detail_kpis:
                     tooltip=["month:T", "avg_cycle_days:Q"],
                 )
             )
-            st.subheader("MVPs & Avg Cycle")
-            st.altair_chart(
-                (bars + line).properties(height=260), use_container_width=True
+            st.subheader("Delivery & Execution Trend")
+            st.altair_chart((bars + line).properties(height=260), use_container_width=True)
+
+        impact_by_use_case = (
+            in_scope.groupby("ai_use_case", as_index=False)
+            .agg(avg_impact=("business_impact_score", "mean"), projects=("project_name", "count"))
+            .sort_values("avg_impact", ascending=False)
+        )
+        impact_by_use_case = impact_by_use_case[impact_by_use_case["ai_use_case"].astype(str).str.strip() != ""]
+        if not impact_by_use_case.empty:
+            st.subheader("AI Use Cases – Business Impact")
+            impact_chart = (
+                alt.Chart(impact_by_use_case)
+                .mark_bar()
+                .encode(
+                    x=alt.X("ai_use_case:N", title="AI Use Case", sort="-y"),
+                    y=alt.Y("avg_impact:Q", title="Avg Impact Score (1-5)"),
+                    color=alt.Color("ai_use_case:N", title="AI Use Case"),
+                    tooltip=["ai_use_case:N", "avg_impact:Q", "projects:Q"],
+                )
+                .properties(height=260)
             )
-            st.dataframe(monthly)
-        else:
-            st.info("No MVP deliveries in selected range")
+            st.altair_chart(impact_chart, use_container_width=True)
+
+        st.subheader("Project Management / Head of AI Summary")
+        st.dataframe(
+            in_scope[
+                [
+                    "project_name",
+                    "dept",
+                    "owner",
+                    "status",
+                    "ai_use_case",
+                    "start_date",
+                    "mvp_target_date",
+                    "mvp_actual_date",
+                    "on_time",
+                    "execution_score",
+                    "business_impact_score",
+                    "business_impact_note",
+                ]
+            ].sort_values("mvp_target_date", ascending=False)
+        )
         continue
 
     # ---- Time Mgmt: stacked bars + pie
@@ -587,7 +641,11 @@ with st.form("append_form"):
     if selected_csv_key in CSV_SCHEMAS:
         for field in CSV_SCHEMAS[selected_csv_key]:
             # Dates
-            if field in (
+            if selected_csv_key == "project_mgmt" and field == "mvp_actual_date":
+                field_inputs[field] = st.text_input(
+                    field, placeholder="Optional (YYYY-MM-DD for delivered projects)"
+                )
+            elif field in (
                 "date",
                 "date_closed",
                 "idea_date",
@@ -618,12 +676,19 @@ with st.form("append_form"):
             # Selects
             elif selected_csv_key == "project_mgmt" and field == "dept":
                 field_inputs[field] = st.selectbox(field, DEPT_OPTIONS)
+            elif selected_csv_key == "project_mgmt" and field == "status":
+                field_inputs[field] = st.selectbox(field, PROJECT_STATUS_OPTIONS)
             elif selected_csv_key == "worklog" and field == "type":
                 field_inputs[field] = st.selectbox(field, WORKLOG_TYPES)
             elif selected_csv_key == "learning" and field == "core_skill":
                 field_inputs[field] = st.selectbox(field, CORE_SKILL_OPTIONS)
 
             # Numerics
+            elif selected_csv_key == "project_mgmt" and field in (
+                "execution_score",
+                "business_impact_score",
+            ):
+                field_inputs[field] = st.number_input(field, min_value=1.0, max_value=5.0, step=1.0, value=3.0)
             elif field in (
                 "time_spent_hrs",
                 "development",
@@ -653,6 +718,8 @@ with st.form("append_form"):
                 ):
                     if hasattr(v, "strftime"):
                         field_inputs[k] = v.strftime("%Y-%m-%d")
+                    elif k == "mvp_actual_date" and isinstance(v, str):
+                        field_inputs[k] = v.strip()
                 if k == "month" and hasattr(v, "strftime"):
                     field_inputs[k] = v.strftime("%Y-%m")
 

@@ -7,9 +7,9 @@ KPI_FUNCTIONS: Dict[str, Callable[[pd.DataFrame], pd.DataFrame]] = {}
 # Metadata for each KPI (display name, unit, description, source)
 KPI_META: Dict[str, Dict] = {
     "project_mgmt": {
-        "display_name": "Project Management (MVP Delivery)",
+        "display_name": "Project Management + Head of AI",
         "unit": "count",
-        "description": "Projects running, average MVP cycle (days), and on-time delivery rate.",
+        "description": "Simple delivery/execution and business-impact view from one project_mgmt CSV.",
         "source_csv": "project_mgmt.csv",
     },
     # Unified KPI
@@ -59,13 +59,29 @@ def register_kpi(name: str):
 def compute_project_mgmt(df: pd.DataFrame) -> pd.DataFrame:
     df2 = df.copy()
     for c in ["start_date", "mvp_target_date", "mvp_actual_date"]:
+        if c not in df2.columns:
+            df2[c] = pd.NaT
         df2[c] = pd.to_datetime(df2[c], errors="coerce")
+
+    for c in ["project_name", "dept", "owner", "status", "ai_use_case", "business_impact_note"]:
+        if c not in df2.columns:
+            df2[c] = ""
+        df2[c] = df2[c].fillna("")
+
+    for c in ["execution_score", "business_impact_score"]:
+        if c not in df2.columns:
+            df2[c] = 0
+        df2[c] = pd.to_numeric(df2[c], errors="coerce").fillna(0)
+
     df2["mvp_cycle_days"] = (df2["mvp_actual_date"] - df2["start_date"]).dt.days
     df2["on_time"] = (
         (df2["mvp_actual_date"].notna())
         & (df2["mvp_actual_date"] <= df2["mvp_target_date"])
     ).astype(int)
-    df2["month"] = df2["mvp_actual_date"].dt.to_period("M").astype("datetime64[ns]")
+    df2["schedule_slip_days"] = (df2["mvp_actual_date"] - df2["mvp_target_date"]).dt.days
+
+    timeline_date = df2["mvp_actual_date"].combine_first(df2["mvp_target_date"])
+    df2["month"] = timeline_date.dt.to_period("M").astype("datetime64[ns]")
     return df2
 
 

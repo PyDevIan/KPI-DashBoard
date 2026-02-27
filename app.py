@@ -164,10 +164,8 @@ st.title("🏆 Personal Career KPI Dashboard")
 flag_kpis = [k for k in CRITICAL_KPIS if k in selected_kpis]
 detail_kpis = selected_kpis  # always show plots/details for every selected KPI
 
-
-cols = st.columns(len(flag_kpis)) if flag_kpis else [st]
-for idx, kpi in enumerate(flag_kpis):
-    col = cols[idx]
+top_metrics = []
+for kpi in flag_kpis:
     df_raw = cached_load(uploads[kpi])
     df_kpi = metrics.compute_kpi(kpi, df_raw)
 
@@ -204,10 +202,14 @@ for idx, kpi in enumerate(flag_kpis):
         total_count = int(len(w))
         total_time = float(w["time_consumed"].sum())
 
-        col.metric(
-            label=f"{label} – Total Closed", value=f"{total_count} {unit}", help=help_
+        top_metrics.append(
+            {
+                "label": f"{label} – Total Closed",
+                "value": f"{total_count} {unit}",
+                "help": help_,
+            }
         )
-        col.metric(label="Total Time Consumed", value=f"{total_time:.1f} hours")
+        top_metrics.append({"label": "Total Time Consumed", "value": f"{total_time:.1f} hours"})
         continue
 
     if kpi == "learning":
@@ -222,9 +224,9 @@ for idx, kpi in enumerate(flag_kpis):
             invested = (
                 float(lr["time_spent_sum"].sum()) if "time_spent_sum" in lr else 0.0
             )
-            col.metric("Hours Invested", f"{invested:.1f} hrs")
+            top_metrics.append({"label": "Hours Invested", "value": f"{invested:.1f} hrs"})
         else:
-            col.info("No records")
+            top_metrics.append({"label": "Hours Invested", "value": "No records"})
         continue
 
     # ---- PROJECT MGMT: headline = projects running (only here; not in details)
@@ -239,39 +241,65 @@ for idx, kpi in enumerate(flag_kpis):
                 | (pm["mvp_actual_date"] >= pd.to_datetime(start_date))
             )
         ]
-        col.metric(label="Projects Running", value=f"{len(running)}", help=help_)
+        top_metrics.append(
+            {"label": "Projects Running", "value": f"{len(running)}", "help": help_}
+        )
         continue
 
     # ---- TIME MGMT: headline = weighted Dev Focus %
     if kpi == "time_mgmt":
         tm = metrics.compute_kpi("time_mgmt", df_raw)
         if tm.empty:
-            col.info("No records")
+            top_metrics.append({"label": "Time Management (Dev Focus)", "value": "No records"})
+            top_metrics.append({"label": "Weighted Learning Time", "value": "No records"})
+            top_metrics.append({"label": "Weighted Meeting Time", "value": "No records"})
             continue
         tm = tm[
             (tm["date"] >= pd.to_datetime(start_date))
             & (tm["date"] <= pd.to_datetime(end_date))
         ]
         if tm.empty:
-            col.info("No records")
+            top_metrics.append({"label": "Time Management (Dev Focus)", "value": "No records"})
+            top_metrics.append({"label": "Weighted Learning Time", "value": "No records"})
+            top_metrics.append({"label": "Weighted Meeting Time", "value": "No records"})
             continue
         dev_sum = float(pd.to_numeric(tm["development"], errors="coerce").sum())
+        learning_sum = float(pd.to_numeric(tm["learning"], errors="coerce").sum())
+        meetings_sum = float(pd.to_numeric(tm["meetings"], errors="coerce").sum())
         total_sum = float(pd.to_numeric(tm["total_hours"], errors="coerce").sum())
         dev_focus = (dev_sum / total_sum * 100) if total_sum > 0 else 0.0
-        col.metric(
-            label="Time Management (Dev Focus)",
-            value=f"{dev_focus:.1f} %",
-            help="Weighted Dev Focus across selected days (ΣDevelopment / ΣTotal Hours)",
+        learning_weighted = (learning_sum / total_sum * 100) if total_sum > 0 else 0.0
+        meetings_weighted = (meetings_sum / total_sum * 100) if total_sum > 0 else 0.0
+        top_metrics.append(
+            {
+                "label": "Time Management (Dev Focus)",
+                "value": f"{dev_focus:.1f} %",
+                "help": "Weighted Dev Focus across selected days (ΣDevelopment / ΣTotal Hours)",
+            }
+        )
+        top_metrics.append(
+            {
+                "label": "Weighted Learning Time",
+                "value": f"{learning_weighted:.1f} %",
+                "help": "Weighted Learning Time across selected days (ΣLearning / ΣTotal Hours)",
+            }
+        )
+        top_metrics.append(
+            {
+                "label": "Weighted Meeting Time",
+                "value": f"{meetings_weighted:.1f} %",
+                "help": "Weighted Meeting Time across selected days (ΣMeetings / ΣTotal Hours)",
+            }
         )
         continue
 
     # ---- Fallback
     if df_kpi.empty:
-        col.info("No records")
+        top_metrics.append({"label": label, "value": "No records"})
         continue
     metric_cols = [c for c in df_kpi.columns if c != "month"]
     if not metric_cols:
-        col.info("No metric columns")
+        top_metrics.append({"label": label, "value": "No metric columns"})
         continue
     value = (
         df_kpi.sort_values("month").iloc[-1][metric_cols[0]]
@@ -279,7 +307,14 @@ for idx, kpi in enumerate(flag_kpis):
         else df_kpi[metric_cols[0]].iloc[-1]
     )
     fmt = "{:.0f}" if unit in ("count",) else "{:.2f}"
-    col.metric(label=label, value=f"{fmt.format(value)} {unit}", help=help_)
+    top_metrics.append(
+        {"label": label, "value": f"{fmt.format(value)} {unit}", "help": help_}
+    )
+
+if top_metrics:
+    cols = st.columns(len(top_metrics))
+    for idx, card in enumerate(top_metrics):
+        cols[idx].metric(label=card["label"], value=card["value"], help=card.get("help"))
 
 st.header("Trends & Details")
 
